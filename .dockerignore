@@ -1,0 +1,9 @@
+.git
+.github
+bin/
+dist/
+*.tar.gz
+.devcontainer
+scripts/
+README.md
+LICENSE

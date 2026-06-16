@@ -1,0 +1,41 @@
+name: integration
+
+# Boots a real Incus VM, so it needs KVM. GitHub-hosted ubuntu runners expose /dev/kvm
+# once the udev permission is set. Kept in its own workflow so a flaky hosted-KVM run never
+# blocks the fast CI signal.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vm-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || echo "no /dev/kvm on this runner — the integration test will skip"
+
+      - name: Install & initialize Incus
+        run: sudo -E ./scripts/ci-incus-up.sh
+
+      - name: Integration tests (boots a VM)
+        run: go test -tags integration -timeout 600s -v ./internal/incus/...

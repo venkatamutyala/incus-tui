@@ -1,0 +1,10 @@
+# build artifacts
+/bin/
+/dist/
+
+# test / coverage output
+cover.out
+*.out
+
+# local binary
+/incus-tui

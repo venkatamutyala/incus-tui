@@ -1,0 +1,19 @@
+{
+  "name": "incus-tui",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+  "//": "incus-tui develops against a real local Incus daemon that boots VMs. That needs a",
+  "//2": "privileged, KVM-capable container: hardware virtualization (/dev/kvm), vsock",
+  "//3": "(/dev/vhost-vsock), tun, and the full capability set. runArgs documents those host",
+  "//4": "requirements; scripts/setup-dev.sh installs Incus and start-incusd.sh (re)starts the",
+  "//5": "daemon on each container start (there is no systemd to do it).",
+  "runArgs": [
+    "--privileged",
+    "--device=/dev/kvm",
+    "--device=/dev/net/tun",
+    "--device=/dev/vhost-net",
+    "--device=/dev/vhost-vsock"
+  ],
+  "postCreateCommand": "bash scripts/setup-dev.sh",
+  "postStartCommand": "bash scripts/start-incusd.sh",
+  "remoteUser": "vscode"
+}
