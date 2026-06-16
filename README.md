@@ -67,9 +67,13 @@ curl -fsSL https://raw.githubusercontent.com/venkatamutyala/incus-tui/main/insta
 ```
 
 The script ([`install.sh`](install.sh)) detects your architecture (linux `amd64`/`arm64`),
-verifies the SHA-256 checksum, and installs to `/usr/local/bin`. Override with
-`INSTALL_DIR=…` or pin a release with `INCUS_TUI_VERSION=v0.0.1`. It needs `curl`, `tar`,
-and `sudo` (for `/usr/local/bin`).
+verifies the download, and installs to `/usr/local/bin`. It is **fail-closed**: it always
+checks the SHA-256 checksum and refuses to install on any mismatch or missing checksum. If
+[`cosign`](https://github.com/sigstore/cosign) is installed it *also* verifies the release
+signature (authenticity — see [Verify a download](#verify-a-download)); if not, it prints a
+warning that it can confirm only integrity, not authenticity, and continues. Override with
+`INSTALL_DIR=…` or pin a release with `INCUS_TUI_VERSION=v0.0.2`. It needs `curl`, `tar`,
+`sha256sum`, and `sudo` (for `/usr/local/bin`).
 
 Prefer to do it by hand, or use Go?
 
@@ -92,19 +96,33 @@ key; the signatures are bound to this repo's release workflow identity and logge
 public transparency log. So you can confirm a download was built by *this* repo's CI, independent
 of GitHub's release storage.
 
-`install.sh` runs the cosign check automatically **if `cosign` is installed** (and aborts on a
-mismatch); otherwise it falls back to the checksum. To verify by hand:
+**What the one-liner guarantees:** `install.sh` always verifies the SHA-256 checksum and aborts
+on a mismatch (**integrity**). It verifies the cosign signature (**authenticity**) *only if
+`cosign` is installed* — otherwise it warns that it cannot prove authenticity and continues on the
+checksum alone. The checksum and the binary live in the same release, so a checksum match alone
+does **not** prove a release wasn't tampered with at the source; only the signature does. For an
+authenticity guarantee, install `cosign` before running the one-liner, or verify by hand below.
 
 ```sh
-# cosign — no auth required. Verify the signed checksums, then check your archive against it.
+# Fetch the archive + the signed checksums and its keyless cert/signature.
+v=v0.0.2; a=incus-tui_linux_amd64.tar.gz
+base=https://github.com/venkatamutyala/incus-tui/releases/download/$v
+curl -fsSLO "$base/$a"
+curl -fsSLO "$base/checksums.txt"
+curl -fsSLO "$base/checksums.txt.pem"
+curl -fsSLO "$base/checksums.txt.sig"
+
+# cosign — no key, no login. Proves checksums.txt was signed by this repo's release.yml.
 cosign verify-blob checksums.txt \
   --certificate checksums.txt.pem --signature checksums.txt.sig \
-  --certificate-identity-regexp '^https://github.com/venkatamutyala/incus-tui/.github/workflows/.+@refs/tags/v.+$' \
+  --certificate-identity-regexp '^https://github\.com/venkatamutyala/incus-tui/\.github/workflows/release\.yml@refs/tags/v.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Then confirm your archive matches the now-verified checksums.
 sha256sum --check --ignore-missing checksums.txt
 
 # or SLSA provenance via gh (needs `gh auth login`, even for a public repo):
-gh attestation verify incus-tui_linux_amd64.tar.gz --repo venkatamutyala/incus-tui \
+gh attestation verify "$a" --repo venkatamutyala/incus-tui \
   --signer-workflow venkatamutyala/incus-tui/.github/workflows/release.yml
 
 # the multi-arch image is attested too:

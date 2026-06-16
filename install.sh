@@ -43,34 +43,49 @@ echo "Downloading ${asset} (${VERSION})…"
 curl -fSL --proto '=https' "${base}/${asset}" -o "${tmp}/${asset}" \
 	|| err "download failed: ${base}/${asset}"
 
-if curl -fsSL "${base}/checksums.txt" -o "${tmp}/checksums.txt" 2>/dev/null; then
-	# Opportunistic provenance: if cosign is installed, cryptographically verify that
-	# checksums.txt was signed (keyless, no auth) by this repo's release workflow, and
-	# FAIL CLOSED on mismatch. Without cosign we fall back to the checksum below.
-	# (For full SLSA provenance use `gh attestation verify` — see the README.)
-	if command -v cosign >/dev/null 2>&1 \
-		&& curl -fsSL "${base}/checksums.txt.sig" -o "${tmp}/checksums.txt.sig" 2>/dev/null \
-		&& curl -fsSL "${base}/checksums.txt.pem" -o "${tmp}/checksums.txt.pem" 2>/dev/null; then
-		cert_id_re="^https://github.com/${REPO}/.github/workflows/.+@refs/tags/v.+$"
-		cosign verify-blob "${tmp}/checksums.txt" \
-			--certificate "${tmp}/checksums.txt.pem" \
-			--signature "${tmp}/checksums.txt.sig" \
-			--certificate-identity-regexp "$cert_id_re" \
-			--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-			>/dev/null 2>&1 || err "cosign signature verification of checksums.txt failed"
-		echo "Signature verified (cosign keyless)."
-	fi
+# --- Verify the download (fail closed) ---------------------------------------
+# checksums.txt ships with every release and is REQUIRED: a fetch failure is a hard
+# error, never a silent skip.
+curl -fSL --proto '=https' "${base}/checksums.txt" -o "${tmp}/checksums.txt" \
+	|| err "could not download checksums.txt — refusing to install unverified"
 
-	# Integrity: confirm the downloaded archive matches the (now-verified) checksums.
-	if command -v sha256sum >/dev/null 2>&1; then
-		want="$(awk -v f="$asset" '$2 == f {print $1}' "${tmp}/checksums.txt")"
-		if [ -n "$want" ]; then
-			got="$(sha256sum "${tmp}/${asset}" | awk '{print $1}')"
-			[ "$want" = "$got" ] || err "checksum mismatch for ${asset}"
-			echo "Checksum OK."
-		fi
-	fi
+# Authenticity: cosign keyless verification (no key, no login) proves checksums.txt was
+# signed by THIS repo's release workflow, which integrity (checksum) alone cannot — an
+# attacker who can swap the binary on the release storage can swap checksums.txt too.
+# If cosign is present the signature MUST verify (fail closed); if absent we fall back
+# to integrity only and say so LOUDLY.
+if command -v cosign >/dev/null 2>&1; then
+	curl -fSL --proto '=https' "${base}/checksums.txt.sig" -o "${tmp}/checksums.txt.sig" \
+		|| err "cosign is installed but checksums.txt.sig is missing — refusing to install"
+	curl -fSL --proto '=https' "${base}/checksums.txt.pem" -o "${tmp}/checksums.txt.pem" \
+		|| err "cosign is installed but checksums.txt.pem is missing — refusing to install"
+	# Bind to this repo's release.yml at a v* tag. Dots are escaped so they match
+	# literally rather than any character.
+	cert_id_re="^https://github\.com/${REPO}/\.github/workflows/release\.yml@refs/tags/v.+\$"
+	cosign verify-blob "${tmp}/checksums.txt" \
+		--certificate "${tmp}/checksums.txt.pem" \
+		--signature "${tmp}/checksums.txt.sig" \
+		--certificate-identity-regexp "$cert_id_re" \
+		--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+		>/dev/null 2>&1 || err "cosign signature verification failed — refusing to install"
+	echo "✓ Signature verified (cosign keyless — built by ${REPO} CI)."
+else
+	echo "install: WARNING — cosign not found; skipping SIGNATURE verification." >&2
+	echo "install:   The checksum below proves integrity (no corruption in transit) but" >&2
+	echo "install:   NOT authenticity: it cannot distinguish a genuine release from a" >&2
+	echo "install:   tampered one if the release storage itself is compromised." >&2
+	echo "install:   For full verification, install cosign and re-run, or verify by hand:" >&2
+	echo "install:   https://github.com/${REPO}#verify-a-download" >&2
 fi
+
+# Integrity: the archive MUST match the (now-possibly-signed) checksums. sha256sum is
+# required; if it is missing we cannot verify and refuse rather than install blind.
+command -v sha256sum >/dev/null 2>&1 || err "sha256sum is required to verify the download"
+want="$(awk -v f="$asset" '$2 == f {print $1}' "${tmp}/checksums.txt")"
+[ -n "$want" ] || err "${asset} is not listed in checksums.txt — refusing to install"
+got="$(sha256sum "${tmp}/${asset}" | awk '{print $1}')"
+[ "$want" = "$got" ] || err "checksum mismatch for ${asset} — refusing to install"
+echo "✓ Checksum OK."
 
 tar -xzf "${tmp}/${asset}" -C "${tmp}"
 [ -f "${tmp}/${BIN}" ] || err "archive did not contain ${BIN}"

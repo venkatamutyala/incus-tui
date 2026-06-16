@@ -81,6 +81,41 @@ func TestImageLabel(t *testing.T) {
 	if got := imageLabel(noAlias); got != "ubuntu/noble/cloud" {
 		t.Errorf("properties label = %q, want ubuntu/noble/cloud", got)
 	}
+	// The server capitalizes some os properties ("Almalinux"); the property-built label
+	// must be lowercased to match the alias-style convention used elsewhere (and so the
+	// alias-current and property-older serials collapse to one product).
+	capProps := &api.Image{Fingerprint: "0011223344556677"}
+	capProps.Properties = map[string]string{"os": "Almalinux", "release": "10", "variant": "cloud"}
+	if got := imageLabel(capProps); got != "almalinux/10/cloud" {
+		t.Errorf("capitalized properties label = %q, want almalinux/10/cloud", got)
+	}
+}
+
+func TestProductKey(t *testing.T) {
+	mk := func(arch string, props map[string]string) *api.Image {
+		im := &api.Image{Architecture: arch, Fingerprint: "deadbeefcafe"}
+		im.Properties = props
+		return im
+	}
+	// The alias-current serial (capitalized os via properties) and an older serial must
+	// share a product key so they collapse to one entry.
+	a := productKey(mk("x86_64", map[string]string{"os": "almalinux", "release": "10", "variant": "cloud"}))
+	b := productKey(mk("x86_64", map[string]string{"os": "Almalinux", "release": "10", "variant": "cloud"}))
+	if a != b {
+		t.Errorf("case difference split the product key: %q vs %q", a, b)
+	}
+	// Different variant or arch must NOT collapse.
+	if productKey(mk("x86_64", map[string]string{"os": "almalinux", "release": "10", "variant": "default"})) == a {
+		t.Error("cloud and default variants must have distinct product keys")
+	}
+	if productKey(mk("aarch64", map[string]string{"os": "almalinux", "release": "10", "variant": "cloud"})) == a {
+		t.Error("different architectures must have distinct product keys")
+	}
+	// No os/release metadata → fall back to the fingerprint so unrelated images never merge.
+	fp := productKey(mk("x86_64", map[string]string{}))
+	if fp != "fp:deadbeefcafe" {
+		t.Errorf("metadata-less key = %q, want fp:deadbeefcafe", fp)
+	}
 }
 
 func TestNormalizeArch(t *testing.T) {

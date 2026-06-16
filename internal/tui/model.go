@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os/exec"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
@@ -72,9 +73,10 @@ type model struct {
 	events     chan xincus.Event
 	eventsDone chan struct{}
 
-	ready    bool
-	fatalErr error
-	quitting bool
+	ready      bool
+	loadingVMs bool // a periodic ListVMs is in flight (avoids pile-up on a slow daemon)
+	fatalErr   error
+	quitting   bool
 }
 
 // New constructs the root model wired to a connected Incus client.
@@ -132,6 +134,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case vmsMsg:
+		m.loadingVMs = false
 		if msg.err != nil {
 			if !m.ready {
 				m.fatalErr = msg.err
@@ -148,7 +151,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(tickCmd(), loadVMs(m.client))
+		// Sequence periodicLoad (pointer receiver, mutates m) before returning m so
+		// the loadingVMs flag is captured in the returned model, not lost to copy order.
+		cmd := m.periodicLoad()
+		return m, tea.Batch(tickCmd(), cmd)
 
 	case eventMsg:
 		cmds := []tea.Cmd{waitForEvent(m.events)}
@@ -158,7 +164,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case xincus.EventListenerUp:
 			m.streamUp = true
 		case xincus.EventLifecycle:
-			cmds = append(cmds, loadVMs(m.client))
+			cmds = append(cmds, m.periodicLoad())
 		}
 		return m, tea.Batch(cmds...)
 
@@ -169,6 +175,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		switch {
+		case msg.err == nil && msg.action == "resize":
+			// limits.cpu hotplugs, but a running VM needs a reboot to pick up new memory.
+			cmd = m.setToast(msg.action+" "+msg.name+" ✓ (restart VM to apply memory)", false)
 		case msg.err == nil:
 			cmd = m.setToast(msg.action+" "+msg.name+" ✓", false)
 		case errors.Is(msg.err, context.Canceled):
@@ -190,7 +199,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		vars := &formVars{cpu: "2", mem: "2GiB", disk: "12GiB"}
 		m.vars, m.formKind = vars, formLaunch
 		m.form = newLaunchForm(msg.images, msg.templates, vars).
-			WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-4))
+			WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-5))
 		m.mode = modeForm
 		return m, m.form.Init()
 
@@ -273,9 +282,13 @@ func (m model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case modeLogs:
 		return m.handleLogsKey(k)
 	case modeBusy:
-		if key.Matches(k, m.keys.Back) && m.cancel != nil {
-			m.cancel()
-			m.busyText = "cancelling…"
+		if key.Matches(k, m.keys.Back) {
+			if m.cancel != nil {
+				m.cancel()
+				m.busyText = "cancelling…"
+			} else {
+				m.mode = modeList // e.g. esc during "loading images…"
+			}
 		}
 		return m, nil
 	case modeDetail:
@@ -470,7 +483,7 @@ func (m model) openForm(kind formKind) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.formKind, m.vars, m.selectedName = kind, vars, v.Name
-	m.form = form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-4))
+	m.form = form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-5))
 	m.mode = modeForm
 	return m, m.form.Init()
 }
@@ -482,7 +495,7 @@ func (m model) openSnapshotManager() (tea.Model, tea.Cmd) {
 	}
 	form, vars := newSnapManageForm(v)
 	m.formKind, m.vars, m.selectedName = formSnapManage, vars, v.Name
-	m.form = form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-4))
+	m.form = form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-5))
 	m.mode = modeForm
 	return m, m.form.Init()
 }
@@ -500,7 +513,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 	case formDelete:
 		if !vars.confirm {
 			m.mode = modeList
-			return m, nil
+			return m, m.setToast("delete cancelled", false)
 		}
 		return m.busy("delete", name, func(ctx context.Context) error {
 			return m.client.Delete(ctx, name)
@@ -535,7 +548,7 @@ func (m model) completeSnapManage(name string, vars *formVars) (tea.Model, tea.C
 	case strings.HasPrefix(vars.action, "restore:"):
 		if !vars.confirm {
 			m.mode = modeList
-			return m, nil
+			return m, m.setToast("restore cancelled", false)
 		}
 		snap := strings.TrimPrefix(vars.action, "restore:")
 		return m.busy("restore", name, func(ctx context.Context) error {
@@ -544,7 +557,7 @@ func (m model) completeSnapManage(name string, vars *formVars) (tea.Model, tea.C
 	case strings.HasPrefix(vars.action, "delete:"):
 		if !vars.confirm {
 			m.mode = modeList
-			return m, nil
+			return m, m.setToast("snapshot delete cancelled", false)
 		}
 		snap := strings.TrimPrefix(vars.action, "delete:")
 		return m.busy("del-snapshot", name, func(ctx context.Context) error {
@@ -563,7 +576,7 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vars.cloud = m.editor.Value()
 			m.formKind = formLaunch
 			m.form = newLaunchForm(m.launchImages, m.launchTemplates, m.vars).
-				WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-4))
+				WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-5))
 			m.mode = modeForm
 			return m, m.form.Init()
 		case "ctrl+s":
@@ -657,10 +670,11 @@ func (m model) actionOp(action string, fn func(*xincus.Client, context.Context, 
 }
 
 func (m model) busy(action, name string, fn func(context.Context) error) (tea.Model, tea.Cmd) {
-	ctx, cancel := context.WithCancel(context.Background())
+	// Backstop deadline so a hung op eventually fails even without esc; esc cancels sooner.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	m.cancel = cancel
 	m.mode, m.busyText = modeBusy, action+" "+name
-	return m, runOp(ctx, action, name, fn)
+	return m, runOp(ctx, cancel, action, name, fn)
 }
 
 func (m model) quit() (tea.Model, tea.Cmd) {
@@ -669,6 +683,17 @@ func (m model) quit() (tea.Model, tea.Cmd) {
 		close(m.eventsDone)
 	}
 	return m, tea.Quit
+}
+
+// periodicLoad issues a background VM refresh unless one is already in flight, so a
+// slow daemon can't accumulate a backlog of overlapping ListVMs calls from the tick
+// and event streams. The flag is cleared when the vmsMsg result lands.
+func (m *model) periodicLoad() tea.Cmd {
+	if m.loadingVMs {
+		return nil
+	}
+	m.loadingVMs = true
+	return loadVMs(m.client)
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -683,6 +708,8 @@ func (m *model) setToast(text string, isErr bool) tea.Cmd {
 
 func (m *model) setLogsContent(content string, err error, empty string) {
 	switch {
+	case err != nil && strings.TrimSpace(content) != "":
+		m.logs.SetContent(content + "\n\n[error: " + err.Error() + "]")
 	case err != nil:
 		m.logs.SetContent("error: " + err.Error())
 	case strings.TrimSpace(content) == "":
@@ -750,6 +777,10 @@ func (m *model) syncTable() {
 	for i, c := range cols {
 		tcols[i] = table.Column{Title: c.title, Width: c.width}
 	}
+	// Clear rows before shrinking the column set: bubbles' SetColumns re-renders the
+	// existing (wider) rows against the new, shorter column slice and panics with an
+	// index-out-of-range on resize. Clearing first avoids the mismatch.
+	m.table.SetRows(nil)
 	m.table.SetColumns(tcols)
 
 	rows := make([]table.Row, len(m.filtered))
@@ -810,6 +841,6 @@ func (m *model) layout() {
 	m.editor.SetHeight(max(6, m.height-8))
 
 	if m.form != nil {
-		m.form = m.form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-4))
+		m.form = m.form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-5))
 	}
 }

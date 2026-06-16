@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lxc/incus/v7/shared/api"
 )
@@ -31,7 +32,14 @@ func (c *Client) ListVMImages() ([]Image, error) {
 	}
 	host := c.hostArch() // "" if undetermined → don't filter
 
-	out := make([]Image, 0, len(raw))
+	// The server publishes several daily-build serials per product, so the same image
+	// appears ~3× (≈242 entries collapse to ≈83 products). Group by product and keep
+	// the newest build so the launcher shows one clean row per image.
+	type entry struct {
+		img     Image
+		created time.Time
+	}
+	best := map[string]*entry{}
 	for i := range raw {
 		im := &raw[i]
 		if im.Type != "virtual-machine" {
@@ -40,14 +48,26 @@ func (c *Client) ListVMImages() ([]Image, error) {
 		if host != "" && normalizeArch(im.Architecture) != host {
 			continue // an image of another arch can't boot here
 		}
-		out = append(out, Image{
-			Fingerprint: im.Fingerprint,
-			Alias:       imageLabel(im),
-			Cloud:       im.Properties["variant"] == "cloud",
-			Description: im.Properties["description"],
-			Arch:        im.Architecture,
-			SizeBytes:   im.Size,
-		})
+		key := productKey(im)
+		if e, ok := best[key]; ok && !im.CreatedAt.After(e.created) {
+			continue // an older or equal build of a product we've already kept
+		}
+		best[key] = &entry{
+			created: im.CreatedAt,
+			img: Image{
+				Fingerprint: im.Fingerprint,
+				Alias:       imageLabel(im),
+				Cloud:       im.Properties["variant"] == "cloud",
+				Description: im.Properties["description"],
+				Arch:        im.Architecture,
+				SizeBytes:   im.Size,
+			},
+		}
+	}
+
+	out := make([]Image, 0, len(best))
+	for _, e := range best {
+		out = append(out, e.img)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		// Cloud images first (they ship the agent), then by label.
@@ -57,6 +77,19 @@ func (c *Client) ListVMImages() ([]Image, error) {
 		return out[i].Alias < out[j].Alias
 	})
 	return out, nil
+}
+
+// productKey identifies an image product independent of its daily-build serial, so the
+// serials of one product collapse together. It falls back to the fingerprint when the
+// simplestreams properties are absent, so a metadata-less image is never merged with
+// an unrelated one.
+func productKey(im *api.Image) string {
+	p := im.Properties
+	os, rel := p["os"], p["release"]
+	if os == "" || rel == "" {
+		return "fp:" + im.Fingerprint
+	}
+	return strings.ToLower(os + "/" + rel + "/" + p["variant"] + "/" + im.Architecture)
 }
 
 // imageLabel returns the best display label for an image: its primary alias if it
@@ -74,7 +107,9 @@ func imageLabel(im *api.Image) string {
 		}
 	}
 	if len(parts) > 0 {
-		return strings.Join(parts, "/")
+		// Lowercase so a property-built label (e.g. "Almalinux/10/cloud") matches the
+		// alias-style convention ("almalinux/10/cloud") used elsewhere.
+		return strings.ToLower(strings.Join(parts, "/"))
 	}
 	if len(im.Fingerprint) >= 12 {
 		return im.Fingerprint[:12]

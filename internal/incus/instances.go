@@ -318,12 +318,16 @@ func (c *Client) CreateVM(ctx context.Context, spec CreateSpec) error {
 	}
 	// A root-device override replaces the profile's root device entirely, so copy it
 	// (preserving the real pool/path) and override only the size. This makes the tool
-	// storage-agnostic instead of assuming a pool literally named "default".
+	// storage-agnostic instead of assuming a pool literally named "default". If a size
+	// was requested but the root device can't be resolved, fail loudly rather than
+	// silently launching at the default size.
 	if spec.DiskSize != "" {
-		if root := c.rootDevice(); root != nil {
-			root["size"] = spec.DiskSize
-			post.Devices = map[string]map[string]string{"root": root}
+		root, err := c.rootDevice()
+		if err != nil {
+			return fmt.Errorf("creating VM %q: setting disk size: %w", spec.Name, err)
 		}
+		root["size"] = spec.DiskSize
+		post.Devices = map[string]map[string]string{"root": root}
 	}
 
 	op, err := c.server.CreateInstance(post)
@@ -337,21 +341,21 @@ func (c *Client) CreateVM(ctx context.Context, spec CreateSpec) error {
 }
 
 // rootDevice returns a copy of the default profile's root disk device (incl. its
-// pool), or nil if it can't be resolved.
-func (c *Client) rootDevice() map[string]string {
+// pool), so a caller can override just the size while preserving the configured pool.
+func (c *Client) rootDevice() (map[string]string, error) {
 	prof, _, err := c.server.GetProfile("default")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("reading default profile: %w", err)
 	}
 	root, ok := prof.Devices["root"]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("default profile has no root disk device to size")
 	}
 	out := make(map[string]string, len(root)+1)
 	for k, v := range root {
 		out[k] = v
 	}
-	return out
+	return out, nil
 }
 
 // hostArch returns the daemon's kernel architecture in canonical form (e.g. x86_64),

@@ -65,9 +65,11 @@ func loadVMs(c *xincus.Client) tea.Cmd {
 }
 
 // runOp runs a cancelable, blocking service-layer operation off the UI thread and
-// reports the result as an opDoneMsg.
-func runOp(ctx context.Context, action, name string, fn func(context.Context) error) tea.Cmd {
+// reports the result as an opDoneMsg. It owns the op's context: cancel is always
+// called when the op returns, releasing the backstop timer set by busy().
+func runOp(ctx context.Context, cancel context.CancelFunc, action, name string, fn func(context.Context) error) tea.Cmd {
 	return func() tea.Msg {
+		defer cancel()
 		return opDoneMsg{action: action, name: name, err: fn(ctx)}
 	}
 }

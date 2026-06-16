@@ -92,6 +92,35 @@ func TestApplyFilterByName(t *testing.T) {
 	}
 }
 
+// Regression for the resize crash: bubbles' table.SetColumns re-renders the existing
+// (wider) rows against the new, shorter column slice and panics with index-out-of-range
+// when the terminal shrinks. syncTable must clear rows before shrinking the column set.
+func TestSyncTableResizeShrinkNoPanic(t *testing.T) {
+	m := testModel()
+	m.vms = vmsNamed("web", "db", "cache")
+
+	m.width = 200 // wide: all 7 columns, rows built with 7 cells
+	m.applyFilter()
+	if got := len(m.table.Columns()); got != 7 {
+		t.Fatalf("precondition: wide table has %d columns, want 7", got)
+	}
+
+	// Shrink hard to far fewer columns. Before the fix this panicked.
+	m.width = 40
+	m.applyFilter()
+	_ = m.table.View() // rendering is where the row/column mismatch blew up
+
+	want := len(visibleCols(40))
+	if got := len(m.table.Columns()); got != want {
+		t.Errorf("after shrink, table has %d columns, want %d", got, want)
+	}
+	for i, r := range m.table.Rows() {
+		if len(r) != want {
+			t.Errorf("row %d has %d cells, want %d (column drift)", i, len(r), want)
+		}
+	}
+}
+
 // Regression for the bug where, after the selected VM disappeared, the cursor kept a
 // stale index that pointed at a different VM (so the next action hit the wrong one).
 func TestApplyFilterSelectionFallback(t *testing.T) {

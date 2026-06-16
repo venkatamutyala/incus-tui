@@ -31,18 +31,31 @@ func (c *Client) ConsoleLog(name string) (string, error) {
 // own non-zero exit (e.g. cloud-init "error" state) is reported in the captured text,
 // not as an error.
 func (c *Client) CloudInitStatus(ctx context.Context, name string) (string, error) {
-	var buf bytes.Buffer
+	// The client mirrors stdout and stderr on separate goroutines, so give each its
+	// own buffer (a shared one would be written concurrently → data race) and wait on
+	// DataDone before reading: op completion does not guarantee the copies have flushed.
+	var stdout, stderr bytes.Buffer
+	dataDone := make(chan bool)
 	op, err := c.server.ExecInstance(name, api.InstanceExecPost{
 		Command:   []string{"cloud-init", "status", "--long"},
 		WaitForWS: true,
-	}, &incusclient.InstanceExecArgs{Stdout: &buf, Stderr: &buf})
+	}, &incusclient.InstanceExecArgs{Stdout: &stdout, Stderr: &stderr, DataDone: dataDone})
 	if err != nil {
 		return "", fmt.Errorf("cloud-init status for %q: %w", name, err)
 	}
-	if err := waitOp(ctx, op); err != nil {
-		return strings.TrimSpace(buf.String()), fmt.Errorf("cloud-init status for %q: %w", name, err)
+	waitErr := waitOp(ctx, op)
+	<-dataDone // the mirror goroutines finish once the op completes or is cancelled
+
+	out := strings.TrimSpace(stdout.String())
+	if errText := strings.TrimSpace(stderr.String()); errText != "" {
+		if out != "" {
+			out += "\n"
+		}
+		out += errText
 	}
-	out := strings.TrimSpace(buf.String())
+	if waitErr != nil {
+		return out, fmt.Errorf("cloud-init status for %q: %w", name, waitErr)
+	}
 	if out == "" {
 		out = "(no output — is cloud-init installed in this image?)"
 	}

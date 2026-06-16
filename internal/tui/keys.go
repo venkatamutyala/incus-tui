@@ -35,13 +35,15 @@ func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Help, k.Quit, k.Filter, k.Enter, k.Launch, k.Shell, k.Logs, k.Delete}
 }
 
-// FullHelp is the expanded '?' cheat sheet.
+// FullHelp is the expanded '?' cheat sheet. Essentials (enter/back/filter/help/quit)
+// lead column 1 so the help library's width truncation drops actions, never the keys
+// needed to leave or get unstuck.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Top, k.Bottom, k.Enter, k.Back},
+		{k.Enter, k.Back, k.Filter, k.Help, k.Quit, k.Refresh},
+		{k.Up, k.Down, k.Top, k.Bottom},
 		{k.Launch, k.Shell, k.Logs, k.Start, k.Stop, k.Restart},
 		{k.Freeze, k.Snapshot, k.EditLimits, k.CopyIP, k.Delete},
-		{k.Filter, k.Refresh, k.Help, k.Quit},
 	}
 }
 

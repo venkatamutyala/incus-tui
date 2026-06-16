@@ -118,7 +118,7 @@ func (m model) bottomBar() string {
 		if m.logsShowCloudInit {
 			view = "cloud-init"
 		}
-		return m.styles.help.Render("c toggle [" + view + "] · r refresh · ↑/↓ scroll · esc back")
+		return m.styles.help.Render("c toggle [" + view + "] · R refresh · ↑/↓ scroll · esc back")
 	default:
 		return m.help.View(m.keys)
 	}
