@@ -29,6 +29,22 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Keyless cosign signature of checksums.txt — that one file is the SHA-256 root of
+# trust for every archive, so signing it covers them all. Produces checksums.txt.sig
+# + checksums.txt.pem (Fulcio cert), verifiable without any maintainer key.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
 

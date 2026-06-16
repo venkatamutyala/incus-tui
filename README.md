@@ -85,6 +85,36 @@ go install github.com/venkatamutyala/incus-tui/cmd/incus-tui@latest
 > The single binary needs the `incus` CLI on `PATH` only for the shell-in (`s`) action;
 > everything else talks to the daemon directly.
 
+## Verify a download
+
+Releases are **keyless-signed** (cosign) and carry **SLSA build provenance** — no maintainer
+key; the signatures are bound to this repo's release workflow identity and logged in Sigstore's
+public transparency log. So you can confirm a download was built by *this* repo's CI, independent
+of GitHub's release storage.
+
+`install.sh` runs the cosign check automatically **if `cosign` is installed** (and aborts on a
+mismatch); otherwise it falls back to the checksum. To verify by hand:
+
+```sh
+# cosign — no auth required. Verify the signed checksums, then check your archive against it.
+cosign verify-blob checksums.txt \
+  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github.com/venkatamutyala/incus-tui/.github/workflows/.+@refs/tags/v.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --check --ignore-missing checksums.txt
+
+# or SLSA provenance via gh (needs `gh auth login`, even for a public repo):
+gh attestation verify incus-tui_linux_amd64.tar.gz --repo venkatamutyala/incus-tui \
+  --signer-workflow venkatamutyala/incus-tui/.github/workflows/release.yml
+
+# the multi-arch image is attested too:
+gh attestation verify oci://ghcr.io/venkatamutyala/incus-tui:latest --repo venkatamutyala/incus-tui
+```
+
+> Why not just the checksum? `checksums.txt` lives in the same release as the binary, so whoever
+> can tamper with one can tamper with both — it proves *integrity*, not *authenticity*. The
+> signature's trust comes from a key no attacker holds, independent of where the file is hosted.
+
 ## Build & run
 
 Requires Go 1.26+ and a reachable local Incus daemon. It connects to the socket at
