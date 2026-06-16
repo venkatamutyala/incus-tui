@@ -60,16 +60,25 @@ During a long operation, `esc` cancels it.
 
 ## Install
 
-Grab a prebuilt static binary (linux `amd64` / `arm64`) from the latest release — pick your arch:
+Install (or upgrade) the latest release in one line — safe to re-run any time to update:
 
 ```sh
-curl -fsSL https://github.com/venkatamutyala/incus-tui/releases/latest/download/incus-tui_linux_amd64.tar.gz | tar -xz
-sudo install incus-tui /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/venkatamutyala/incus-tui/main/install.sh | sh
 ```
 
-Or with Go:
+The script ([`install.sh`](install.sh)) detects your architecture (linux `amd64`/`arm64`),
+verifies the SHA-256 checksum, and installs to `/usr/local/bin`. Override with
+`INSTALL_DIR=…` or pin a release with `INCUS_TUI_VERSION=v0.0.1`. It needs `curl`, `tar`,
+and `sudo` (for `/usr/local/bin`).
+
+Prefer to do it by hand, or use Go?
 
 ```sh
+# manual download (pick amd64 or arm64)
+curl -fsSL https://github.com/venkatamutyala/incus-tui/releases/latest/download/incus-tui_linux_amd64.tar.gz | tar -xz
+sudo install incus-tui /usr/local/bin/
+
+# or with Go
 go install github.com/venkatamutyala/incus-tui/cmd/incus-tui@latest
 ```
 
