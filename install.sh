@@ -6,7 +6,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/venkatamutyala/incus-tui/main/install.sh | sh
 #
 # Environment overrides:
-#   INCUS_TUI_VERSION=v0.0.1       install a specific release (default: latest)
+#   INCUS_TUI_VERSION=v0.0.4       install a specific release (default: latest)
 #   INSTALL_DIR=$HOME/.local/bin   install location (default: /usr/local/bin)
 #
 set -eu

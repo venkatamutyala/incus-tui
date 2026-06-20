@@ -136,8 +136,9 @@ gh attestation verify oci://ghcr.io/venkatamutyala/incus-tui:latest --repo venka
 
 ## Build & run
 
-Requires Go 1.26+ and a reachable local Incus daemon. It connects to the socket at
-`$INCUS_SOCKET` (default `/var/lib/incus/unix.socket`).
+Requires Go 1.26+ and a reachable local Incus daemon. It connects over the local Incus
+unix socket — `$INCUS_SOCKET` if set, otherwise the daemon's default
+(`/run/incus/unix.socket`, falling back to `/var/lib/incus/unix.socket`).
 
 ```sh
 go build -o bin/incus-tui ./cmd/incus-tui
