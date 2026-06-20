@@ -30,26 +30,22 @@ func TemplatesDir() string {
 	return filepath.Join(base, "incus-tui", "templates")
 }
 
-// ensureTemplatesDir creates the templates directory and seeds starter templates
-// the first time it is empty.
+// ensureTemplatesDir creates the templates directory and seeds any baked-in starter that
+// is missing. Seeding by name (rather than only when the dir is empty) means a newly added
+// baked-in template reaches existing installs too, while a starter the user has edited is
+// left untouched (its file already exists).
 func ensureTemplatesDir() (string, error) {
 	dir := TemplatesDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating templates dir: %w", err)
 	}
-	entries, _ := os.ReadDir(dir)
-	hasYAML := false
-	for _, e := range entries {
-		if isYAML(e.Name()) {
-			hasYAML = true
-			break
+	for name, body := range starterTemplates {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); err == nil {
+			continue // already present (possibly user-edited) — never overwrite
 		}
-	}
-	if !hasYAML {
-		for name, body := range starterTemplates {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-				return dir, fmt.Errorf("seeding template %s: %w", name, err)
-			}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			return dir, fmt.Errorf("seeding template %s: %w", name, err)
 		}
 	}
 	return dir, nil
@@ -75,8 +71,9 @@ func ListTemplates() ([]Template, error) {
 		if err != nil {
 			continue
 		}
+		base := strings.TrimSuffix(strings.TrimSuffix(e.Name(), ".yaml"), ".yml")
 		out = append(out, Template{
-			Name:    strings.TrimSuffix(strings.TrimSuffix(e.Name(), ".yaml"), ".yml"),
+			Name:    templateName(base, string(content)),
 			Path:    path,
 			Content: string(content),
 		})
@@ -107,6 +104,24 @@ func isYAML(name string) bool {
 	return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
 }
 
+// templateName returns a template's display name: the value of a "# name: <label>"
+// metadata comment in the header (so the label can contain spaces or "/" that a filename
+// cannot), falling back to the filename base. Only the leading comment block is scanned.
+func templateName(base, content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "# name:"); ok {
+			if n := strings.TrimSpace(rest); n != "" {
+				return n
+			}
+		}
+		if line != "" && !strings.HasPrefix(line, "#") {
+			break // past the header comments into the YAML body
+		}
+	}
+	return base
+}
+
 var starterTemplates = map[string]string{
 	"minimal.yaml": `#cloud-config
 # Minimal example: update apt and install a couple of packages.
@@ -124,5 +139,16 @@ users:
     shell: /bin/bash
     ssh_authorized_keys:
       - ssh-ed25519 AAAA...replace-with-your-public-key
+`,
+	"glueops-work-cde.yaml": `#cloud-config
+# name: GluOps / Work CDE
+# Install curl first, then bootstrap the host with the GlueOps setup script.
+# 'packages' is installed by cloud-init before 'runcmd' runs, so curl is guaranteed
+# to be present; the runcmd string is executed via "sh -c", so the pipe works.
+package_update: true
+packages:
+  - curl
+runcmd:
+  - curl -sL setup.glueops.dev | bash
 `,
 }

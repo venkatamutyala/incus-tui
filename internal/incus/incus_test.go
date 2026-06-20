@@ -28,6 +28,35 @@ func TestValidateCloudInit(t *testing.T) {
 	}
 }
 
+// Every baked-in starter must be valid cloud-init or the wizard would seed a template
+// that fails ValidateCloudInit at launch.
+func TestStarterTemplatesAreValid(t *testing.T) {
+	for name, body := range starterTemplates {
+		if err := ValidateCloudInit(body); err != nil {
+			t.Errorf("starter %s is not valid cloud-init: %v", name, err)
+		}
+	}
+	if _, ok := starterTemplates["glueops-work-cde.yaml"]; !ok {
+		t.Error("glueops-work-cde.yaml starter is missing")
+	}
+}
+
+func TestTemplateName(t *testing.T) {
+	// "# name:" override wins over the filename base, and may contain spaces and "/".
+	if got := templateName("glueops-work-cde", starterTemplates["glueops-work-cde.yaml"]); got != "GluOps / Work CDE" {
+		t.Errorf("name = %q, want %q", got, "GluOps / Work CDE")
+	}
+	// No override → fall back to the filename base.
+	if got := templateName("minimal", starterTemplates["minimal.yaml"]); got != "minimal" {
+		t.Errorf("fallback name = %q, want minimal", got)
+	}
+	// A "# name:" that appears only in the YAML body (not the header) is ignored.
+	body := "#cloud-config\nruncmd:\n  - echo '# name: not-a-name'\n"
+	if got := templateName("base", body); got != "base" {
+		t.Errorf("body-only name = %q, want base", got)
+	}
+}
+
 func TestPrimaryIPv4(t *testing.T) {
 	st := &api.InstanceState{
 		Network: map[string]api.InstanceStateNetwork{
