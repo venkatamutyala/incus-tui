@@ -121,7 +121,11 @@ func (m model) bottomBar() string {
 		if m.logsShowCloudInit {
 			view = "cloud-init"
 		}
-		return m.styles.help.Render("esc back · c toggle [" + view + "] · R refresh · ↑/↓ scroll")
+		auto := "off"
+		if m.logsAuto {
+			auto = "on"
+		}
+		return m.styles.help.Render("esc back · c toggle [" + view + "] · a auto-refresh [" + auto + "] · R refresh · ↑/↓ scroll")
 	default:
 		// Never let the cheat sheet exceed its reserved rows, or it would clip the bottom
 		// of the frame (status line) on a short terminal.

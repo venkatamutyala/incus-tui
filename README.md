@@ -35,8 +35,8 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
 - **Shell in** (`s`) — runs `incus exec <vm>` (bash, falling back to `sh`), gated on
   guest-agent readiness. The bare binary needs the `incus` CLI on `PATH`; the Docker image
   bundles it.
-- **Logs** (`l`) — view a VM's serial console log, and toggle (`c`) to `cloud-init status`
-  to see *why* a launch failed.
+- **Logs** (`l`) — view a VM's serial console log, toggle (`c`) to `cloud-init status` to see
+  *why* a launch failed, and **auto-refresh** to tail it live (on by default; toggle with `a`).
 - **Launch wizard** (`n`) — browse VM-capable images (filtered to your host architecture),
   set size, pick a **cloud-init template**, edit it inline (validated), and launch. Templates
   live in `~/.config/incus-tui/templates` (seeded with starters).

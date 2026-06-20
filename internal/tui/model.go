@@ -64,6 +64,7 @@ type model struct {
 	launchTemplates []xincus.Template
 
 	logsShowCloudInit bool
+	logsAuto          bool // auto-refresh the logs view on each tick
 
 	toast    string
 	toastErr bool
@@ -159,7 +160,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Sequence periodicLoad (pointer receiver, mutates m) before returning m so
 		// the loadingVMs flag is captured in the returned model, not lost to copy order.
 		cmd := m.periodicLoad()
-		return m, tea.Batch(tickCmd(), cmd)
+		cmds := []tea.Cmd{tickCmd(), cmd}
+		if m.mode == modeLogs && m.logsAuto {
+			if m.logsShowCloudInit {
+				cmds = append(cmds, fetchCloudInit(m.client, m.selectedName))
+			} else {
+				cmds = append(cmds, fetchConsoleLog(m.client, m.selectedName))
+			}
+		}
+		return m, tea.Batch(cmds...)
 
 	case eventMsg:
 		cmds := []tea.Cmd{waitForEvent(m.events)}
@@ -391,6 +400,9 @@ func (m model) handleLogsKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, fetchCloudInit(m.client, m.selectedName)
 		}
 		return m, fetchConsoleLog(m.client, m.selectedName)
+	case k.String() == "a":
+		m.logsAuto = !m.logsAuto
+		return m, nil
 	case k.String() == "c":
 		m.logsShowCloudInit = !m.logsShowCloudInit
 		if m.logsShowCloudInit {
@@ -622,6 +634,7 @@ func (m model) openLogs() (tea.Model, tea.Cmd) {
 	}
 	m.selectedName = v.Name
 	m.logsShowCloudInit = false
+	m.logsAuto = true // tail live by default; 'a' turns it off to read scrollback
 	m.mode = modeLogs
 	m.layout() // size the logs viewport for this mode's 1-line help bar
 	m.logs.SetContent("loading console log…")
@@ -753,6 +766,8 @@ func formWidth(termW int) int {
 }
 
 func (m *model) setLogsContent(content string, err error, empty string) {
+	// Stay pinned to the tail across a refresh, but don't yank a reader who scrolled up.
+	atBottom := m.logs.AtBottom()
 	switch {
 	case err != nil && strings.TrimSpace(content) != "":
 		m.logs.SetContent(content + "\n\n[error: " + err.Error() + "]")
@@ -762,7 +777,9 @@ func (m *model) setLogsContent(content string, err error, empty string) {
 		m.logs.SetContent(empty)
 	default:
 		m.logs.SetContent(content)
-		m.logs.GotoBottom()
+		if atBottom {
+			m.logs.GotoBottom()
+		}
 	}
 }
 

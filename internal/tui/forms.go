@@ -78,11 +78,8 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 		if mixed && im.Arch != "" {
 			label = fmt.Sprintf("%-30s %s", label, im.Arch)
 		}
-		if !im.Cloud {
-			// Non-cloud variants lack the guest agent, so shell-in, IP, and cloud-init
-			// status won't work — warn before they pick one.
-			label += "  (no guest agent)"
-		}
+		// Don't tag non-cloud rows per-line — it repeats down the whole list. The field
+		// description below explains that cloud images are the ones with the guest agent.
 		imgOpts = append(imgOpts, huh.NewOption(label, im.Fingerprint))
 	}
 	imgTitle := "Image (type to filter)"
