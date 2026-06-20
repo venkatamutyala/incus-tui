@@ -23,10 +23,12 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
 
 ## Features
 
-- **Live instance table** — status, IPv4, image, age, and live CPU/memory, refreshed by
-  Incus's event stream (instant status changes) plus a periodic tick (metrics/age).
+- **Live instance table** — at-a-glance status (a colored glyph: `●` running, `○` stopped,
+  `◐` frozen, `✗` error), IPv4, image, age, and live CPU / memory %, refreshed by Incus's
+  event stream (instant status changes) plus a periodic tick (metrics/age).
 - **Single-keystroke lifecycle** — start, graceful stop, restart, pause/resume, and a
-  **guarded delete** that names the target VM. Long operations can be cancelled with `esc`.
+  **guarded delete** that names the target VM and warns when it will be force-stopped. Long
+  operations can be cancelled with `esc`.
 - **Snapshots** — create, **restore**, and delete from a snapshot manager (`p`).
 - **Edit CPU/RAM** on an existing VM (`limits.cpu` / `limits.memory`).
 - **Copy a VM's IP** to the clipboard (`y`; OSC52, works over SSH).
@@ -179,6 +181,13 @@ scripts/start-incusd.sh   # (re)start the daemon + prep VM devices — run on ev
 the host-builtin `vhost_vsock` module, recreating `/dev/vsock` and `/dev/vhost-vsock`, the
 firewall guard) and starts `incusd` via its bundled wrapper. See
 `.devcontainer/devcontainer.json` for the required device passthrough.
+
+## Contributing (incl. with AI)
+
+Working on this codebase — by hand or with an AI agent — starts at [`AGENTS.md`](AGENTS.md): a lean
+guide that imports focused docs under [`docs/ai/`](docs/ai/) (architecture, conventions, the gotchas
+that have actually bitten this code, the release process, and the live-verification harness).
+`CLAUDE.md` just points there.
 
 ## Tests
 
