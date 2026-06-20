@@ -28,7 +28,8 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "incus-tui: cannot connect to the local Incus daemon:")
 		fmt.Fprintln(os.Stderr, "  "+err.Error())
-		fmt.Fprintln(os.Stderr, "Is incusd running? Try: scripts/start-incusd.sh")
+		fmt.Fprintln(os.Stderr, "Is Incus running? Start it (e.g. sudo systemctl start incus), and make sure your")
+		fmt.Fprintln(os.Stderr, "user can reach its socket — join the 'incus-admin' group, or set INCUS_SOCKET.")
 		os.Exit(1)
 	}
 	defer client.Disconnect()

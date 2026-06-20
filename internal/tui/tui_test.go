@@ -109,6 +109,36 @@ func TestFormWidth(t *testing.T) {
 	}
 }
 
+func TestUniqueVMName(t *testing.T) {
+	v := uniqueVMName([]string{"web", "db"})
+	if err := v("web"); err == nil {
+		t.Error("expected duplicate name to be rejected")
+	}
+	if err := v("cache"); err != nil {
+		t.Errorf("unique valid name rejected: %v", err)
+	}
+	if err := v("Web"); err == nil { // uppercase fails the base validator
+		t.Error("expected invalid charset to be rejected")
+	}
+}
+
+func TestMemCell(t *testing.T) {
+	cases := []struct {
+		v    xincus.VM
+		want string
+	}{
+		{xincus.VM{AgentReady: false}, "-"},
+		{xincus.VM{AgentReady: true, MemoryUsage: 0}, "-"},
+		{xincus.VM{AgentReady: true, MemoryUsage: 512, MemoryTotal: 2048}, "25%"},
+		{xincus.VM{AgentReady: true, MemoryUsage: 1024, MemoryTotal: 0}, "1.0KiB"}, // no total → absolute
+	}
+	for _, c := range cases {
+		if got := memCell(c.v); got != c.want {
+			t.Errorf("memCell(%+v) = %q, want %q", c.v, got, c.want)
+		}
+	}
+}
+
 func testModel() *model {
 	m := &model{width: 100}
 	m.table = table.New()

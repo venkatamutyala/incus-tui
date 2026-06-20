@@ -41,6 +41,23 @@ func newStyles() styles {
 	}
 }
 
+// statusGlyph pairs a shape with statusColor so VM state is legible without relying on
+// color alone (colorblind users / no-color terminals).
+func statusGlyph(code api.StatusCode) string {
+	switch code {
+	case api.Running:
+		return "●"
+	case api.Frozen:
+		return "◐"
+	case api.Stopped:
+		return "○"
+	case api.Error:
+		return "✗"
+	default:
+		return "·"
+	}
+}
+
 // statusColor maps an Incus status to a foreground color.
 func statusColor(code api.StatusCode) color.Color {
 	switch code {
@@ -90,10 +107,14 @@ func formatBytes(b int64) string {
 	return fmt.Sprintf("%.1f%ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
-// memCell renders memory usage against the configured limit.
+// memCell shows memory pressure as a percent of the guest's total — a denominator the
+// raw byte figure lacked. The absolute usage stays in the detail pane.
 func memCell(v xincus.VM) string {
 	if !v.AgentReady || v.MemoryUsage <= 0 {
 		return "-"
+	}
+	if v.MemoryTotal > 0 {
+		return fmt.Sprintf("%d%%", int(v.MemoryUsage*100/v.MemoryTotal))
 	}
 	return formatBytes(v.MemoryUsage)
 }

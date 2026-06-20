@@ -180,11 +180,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		switch {
+		case msg.err == nil && msg.action == "launch":
+			// Point at the next step — the VM is created but still booting / running cloud-init.
+			cmd = m.setToast("launched "+msg.name+" — l: boot logs, s: shell in once it's up", false)
 		case msg.err == nil && msg.action == "resize":
 			// limits.cpu hotplugs, but a running VM needs a reboot to pick up new memory.
-			cmd = m.setToast(msg.action+" "+msg.name+" ✓ (restart VM to apply memory)", false)
+			cmd = m.setToast("resize "+msg.name+" — restart the VM to apply new memory", false)
 		case msg.err == nil:
-			cmd = m.setToast(msg.action+" "+msg.name+" ✓", false)
+			cmd = m.setToast(msg.action+" "+msg.name, false)
 		case errors.Is(msg.err, context.Canceled):
 			cmd = m.setToast(msg.action+" "+msg.name+": aborted", true)
 		default:
@@ -203,7 +206,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.launchImages, m.launchTemplates = msg.images, msg.templates
 		vars := &formVars{cpu: "2", mem: "2048", disk: "12"}
 		m.vars, m.formKind = vars, formLaunch
-		m.form = newLaunchForm(msg.images, msg.templates, vars).
+		m.form = newLaunchForm(msg.images, msg.templates, vars, vmNames(m.vms)).
 			WithWidth(formWidth(m.width)).WithHeight(max(12, m.height-5))
 		m.mode = modeForm
 		return m, m.form.Init()
@@ -480,7 +483,7 @@ func (m model) openForm(kind formKind) (tea.Model, tea.Cmd) {
 	case formEdit:
 		form, vars = newEditForm(v)
 	case formDelete:
-		form, vars = newDeleteForm(v.Name)
+		form, vars = newDeleteForm(v)
 	default:
 		return m, nil
 	}
@@ -530,7 +533,11 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 			Memory:           withUnit(vars.mem, "MiB"),
 			DiskSize:         withUnit(vars.disk, "GiB"),
 		}
-		m.editor.SetValue(vars.cloud)
+		content := vars.cloud
+		if strings.TrimSpace(content) == "" {
+			content = blankCloudInitScaffold // teach a first-timer the shape; harmless if launched as-is
+		}
+		m.editor.SetValue(content)
 		m.editor.SetWidth(min(m.width, max(20, m.width-4)))
 		m.editor.SetHeight(max(6, m.height-8))
 		m.mode = modeLaunchEdit
@@ -577,7 +584,7 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Back to the (pre-filled) launch form instead of discarding the wizard.
 			m.vars.cloud = m.editor.Value()
 			m.formKind = formLaunch
-			m.form = newLaunchForm(m.launchImages, m.launchTemplates, m.vars).
+			m.form = newLaunchForm(m.launchImages, m.launchTemplates, m.vars, vmNames(m.vms)).
 				WithWidth(formWidth(m.width)).WithHeight(max(12, m.height-5))
 			m.mode = modeForm
 			return m, m.form.Init()
@@ -708,7 +715,20 @@ func (m *model) setToast(text string, isErr bool) tea.Cmd {
 	// YAML or daemon error) would otherwise grow the status row and clip the help bar off
 	// the bottom of the fixed-height frame.
 	m.toast, m.toastErr = strings.Join(strings.Fields(text), " "), isErr
-	return clearToastCmd(m.toastSeq)
+	d := 5 * time.Second
+	if isErr {
+		d = 10 * time.Second // errors linger so a glance-away doesn't miss a failure
+	}
+	return clearToastCmd(m.toastSeq, d)
+}
+
+// vmNames returns the current VM names (used to reject a duplicate in the launch form).
+func vmNames(vms []xincus.VM) []string {
+	names := make([]string, len(vms))
+	for i, v := range vms {
+		names[i] = v.Name
+	}
+	return names
 }
 
 // helpRows is the number of lines the bottom help bar occupies. The multi-line cheat

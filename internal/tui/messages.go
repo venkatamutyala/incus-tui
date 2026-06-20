@@ -118,6 +118,6 @@ func toastAfter(text string, isErr bool) tea.Cmd {
 	return func() tea.Msg { return toastMsg{text: text, isErr: isErr} }
 }
 
-func clearToastCmd(seq int) tea.Cmd {
-	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearToastMsg{seq: seq} })
+func clearToastCmd(seq int, d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return clearToastMsg{seq: seq} })
 }

@@ -8,8 +8,22 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/huh/v2"
 
+	"github.com/lxc/incus/v7/shared/api"
 	xincus "github.com/venkatamutyala/incus-tui/internal/incus"
 )
+
+// blankCloudInitScaffold pre-fills the editor when the user picks "(blank)", teaching the
+// shape of a cloud-config. It's all comments, so launching it as-is is a harmless no-op.
+const blankCloudInitScaffold = `#cloud-config
+# Edit this, or press ctrl+s to launch as-is (an all-comment config does nothing).
+# Uncomment what you need:
+# package_update: true
+# packages:
+#   - htop
+#   - curl
+# runcmd:
+#   - echo "hello from cloud-init" > /etc/motd
+`
 
 type formKind int
 
@@ -42,7 +56,7 @@ func applyEscKeymap(f *huh.Form) *huh.Form {
 	return f.WithKeyMap(km)
 }
 
-func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVars) *huh.Form {
+func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVars, names []string) *huh.Form {
 	// Images are normally pre-filtered to the host architecture, so repeating the arch
 	// on every row is just clutter down the right edge. Show it once in the title and
 	// keep it per-row only if the list is somehow mixed.
@@ -62,6 +76,11 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 		}
 		if mixed && im.Arch != "" {
 			label = fmt.Sprintf("%-30s %s", label, im.Arch)
+		}
+		if !im.Cloud {
+			// Non-cloud variants lack the guest agent, so shell-in, IP, and cloud-init
+			// status won't work — warn before they pick one.
+			label += "  (no guest agent)"
 		}
 		imgOpts = append(imgOpts, huh.NewOption(label, im.Fingerprint))
 	}
@@ -84,8 +103,9 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().Key("name").Title("VM name").
-				Value(&v.name).Validate(validateVMName),
+				Value(&v.name).Validate(uniqueVMName(names)),
 			huh.NewSelect[string]().Key("image").Title(imgTitle).
+				Description("cloud images ship the guest agent (needed for shell, IP, cloud-init)").
 				Options(imgOpts...).Value(&v.imageFP).Filtering(true).Height(10),
 		),
 		huh.NewGroup(
@@ -130,18 +150,36 @@ func newSnapManageForm(vm xincus.VM) (*huh.Form, *formVars) {
 				Value(&v.name).Validate(huh.ValidateNotEmpty()),
 		).WithHideFunc(func() bool { return v.action != "create" }),
 		huh.NewGroup(
-			huh.NewConfirm().Key("ok").Title("Apply this snapshot action?").
+			huh.NewConfirm().Key("ok").
+				TitleFunc(func() string {
+					switch {
+					case strings.HasPrefix(v.action, "restore:"):
+						return fmt.Sprintf("Restore %q to snapshot %q? Discards all changes since the snapshot. Cannot be undone.",
+							vm.Name, strings.TrimPrefix(v.action, "restore:"))
+					case strings.HasPrefix(v.action, "delete:"):
+						return fmt.Sprintf("Delete snapshot %q of %q? Cannot be undone.",
+							strings.TrimPrefix(v.action, "delete:"), vm.Name)
+					}
+					return "Apply this snapshot action?"
+				}, &v.action).
 				Affirmative("Yes").Negative("No").Value(&v.confirm),
 		).WithHideFunc(func() bool { return v.action == "create" }),
 	)
 	return applyEscKeymap(form), v
 }
 
-func newDeleteForm(name string) (*huh.Form, *formVars) {
+func newDeleteForm(vm xincus.VM) (*huh.Form, *formVars) {
 	v := &formVars{}
+	title := fmt.Sprintf("Delete VM %q? This is irreversible.", vm.Name)
+	// Client.Delete force-stops (hard power-off, no graceful shutdown) anything that isn't
+	// already Stopped/Error — disclose that instead of pretending it's a clean delete.
+	if vm.StatusCode != api.Stopped && vm.StatusCode != api.Error {
+		title = fmt.Sprintf("Delete VM %q? It is %s and will be force-stopped (no graceful shutdown), then deleted. Irreversible.",
+			vm.Name, strings.ToLower(vm.Status))
+	}
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().Key("ok").
-			Title(fmt.Sprintf("Delete VM %q? This is irreversible.", name)).
+			Title(title).
 			Affirmative("Delete").Negative("Cancel").Value(&v.confirm),
 	))
 	return applyEscKeymap(form), v
@@ -166,6 +204,24 @@ func validateVMName(s string) error {
 		return fmt.Errorf("name cannot start or end with a hyphen")
 	}
 	return nil
+}
+
+// uniqueVMName wraps validateVMName and additionally rejects a name already in use, so
+// the collision is caught inline in the wizard instead of failing the whole launch.
+func uniqueVMName(existing []string) func(string) error {
+	set := make(map[string]bool, len(existing))
+	for _, n := range existing {
+		set[n] = true
+	}
+	return func(s string) error {
+		if err := validateVMName(s); err != nil {
+			return err
+		}
+		if set[s] {
+			return fmt.Errorf("a VM named %q already exists", s)
+		}
+		return nil
+	}
 }
 
 func validateCPU(s string) error {

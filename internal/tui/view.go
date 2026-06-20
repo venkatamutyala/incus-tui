@@ -93,10 +93,11 @@ func (m model) statusLine() string {
 
 	var mid string
 	if m.mode != modeBusy && m.toast != "" {
+		// Prefix a token so success/failure doesn't rely on green-vs-red color alone.
 		if m.toastErr {
-			mid = m.styles.toastErr.Render(m.toast)
+			mid = m.styles.toastErr.Render("✗ " + m.toast)
 		} else {
-			mid = m.styles.toastOK.Render(m.toast)
+			mid = m.styles.toastOK.Render("✓ " + m.toast)
 		}
 	}
 
@@ -149,7 +150,8 @@ func (m model) fatalScreen() string {
 	return box.Render(
 		m.styles.toastErr.Render("Cannot reach the Incus daemon.") + "\n\n" +
 			m.fatalErr.Error() + "\n\n" +
-			m.styles.dim.Render("Is the daemon running? Try: scripts/start-incusd.sh") + "\n" +
+			m.styles.dim.Render("Is Incus running? Start it (e.g. sudo systemctl start incus), and make sure your") + "\n" +
+			m.styles.dim.Render("user can reach its socket — join the 'incus-admin' group, or set $INCUS_SOCKET.") + "\n" +
 			m.styles.dim.Render("Press q to quit."),
 	)
 }
@@ -169,7 +171,11 @@ type colSpec struct {
 func allCols() []colSpec {
 	return []colSpec{
 		{title: "NAME", min: 12, flex: true, cell: func(v xincus.VM) string { return v.Name }},
-		{title: "STATUS", min: 9, cell: func(v xincus.VM) string { return v.Status }},
+		{title: "STATUS", min: 11, cell: func(v xincus.VM) string {
+			// Glyph + color so state reads at a glance (and without relying on color alone).
+			return lipgloss.NewStyle().Foreground(statusColor(v.StatusCode)).
+				Render(statusGlyph(v.StatusCode) + " " + v.Status)
+		}},
 		{title: "IPV4", min: 15, cell: func(v xincus.VM) string { return orDash(v.IPv4) }},
 		{title: "IMAGE", min: 12, flex: true, cell: func(v xincus.VM) string { return orDash(v.Image) }},
 		{title: "AGE", min: 5, cell: func(v xincus.VM) string { return formatAge(v.Age()) }},
