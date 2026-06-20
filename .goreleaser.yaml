@@ -30,16 +30,16 @@ checksum:
   name_template: "checksums.txt"
 
 # Keyless cosign signature of checksums.txt — that one file is the SHA-256 root of
-# trust for every archive, so signing it covers them all. Produces checksums.txt.sig
-# + checksums.txt.pem (Fulcio cert), verifiable without any maintainer key.
+# trust for every archive, so signing it covers them all. cosign v3 writes a single
+# Sigstore bundle (checksums.txt.bundle) holding the signature, the Fulcio cert, and
+# the Rekor transparency-log entry — verifiable without any maintainer key
+# (cosign v3+ on the verifying side).
 signs:
   - cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.bundle"
     args:
       - sign-blob
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum
