@@ -149,6 +149,6 @@ package_update: true
 packages:
   - curl
 runcmd:
-  - curl -sL setup.glueops.dev | bash
+  - curl -fsSL --proto '=https' https://setup.glueops.dev | bash
 `,
 }

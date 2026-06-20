@@ -14,9 +14,9 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
 
 ```
  incus-tui  local · VMs
- NAME             STATUS     IPV4              IMAGE                        AGE   CPU   MEM
- db               Stopped    -                 Ubuntu noble amd64           5m    1     -
- web              Running    10.241.140.224    Ubuntu noble amd64           5m    2     229.5MiB
+ NAME             STATUS       IPV4              IMAGE                      AGE   CPU   MEM
+ db               ○ Stopped    -                 Ubuntu noble amd64         5m    1     -
+ web              ● Running    10.241.140.224    Ubuntu noble amd64         5m    2     11%
  2 VM(s)
  ? help • q quit • / filter • ↵ details • n new VM • s shell • l logs • d delete
 ```

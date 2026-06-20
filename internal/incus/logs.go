@@ -44,7 +44,14 @@ func (c *Client) CloudInitStatus(ctx context.Context, name string) (string, erro
 		return "", fmt.Errorf("cloud-init status for %q: %w", name, err)
 	}
 	waitErr := waitOp(ctx, op)
-	<-dataDone // the mirror goroutines finish once the op completes or is cancelled
+	// Wait for the mirror goroutines to finish before reading the buffers — but bound it
+	// on ctx so a wedged daemon can't block this goroutine forever. On timeout we return
+	// WITHOUT reading stdout/stderr (the goroutines may still be writing them).
+	select {
+	case <-dataDone:
+	case <-ctx.Done():
+		return "", fmt.Errorf("cloud-init status for %q: %w", name, ctx.Err())
+	}
 
 	out := strings.TrimSpace(stdout.String())
 	if errText := strings.TrimSpace(stderr.String()); errText != "" {

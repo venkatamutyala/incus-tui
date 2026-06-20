@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -123,7 +124,7 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 }
 
 func newEditForm(vm xincus.VM) (*huh.Form, *formVars) {
-	v := &formVars{cpu: vm.CPULimit, mem: vm.MemLimit}
+	v := &formVars{cpu: vm.CPULimit, mem: normalizeMem(vm.MemLimit)}
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewInput().Key("cpu").Title("vCPUs").
 			Placeholder("e.g. 2").Value(&v.cpu).Validate(validateCPU),
@@ -236,9 +237,11 @@ func validateCPU(s string) error {
 	return nil
 }
 
+// Whole numbers only, no embedded space, and units spelled the way Incus accepts them —
+// Incus rejects decimals like "1.5GiB" and a space like "2 GiB", so the form must too.
 var (
-	sizeRe  = regexp.MustCompile(`^\d+(\.\d+)?\s*(B|kB|KB|KiB|MB|MiB|GB|GiB|TB|TiB)?$`)
-	bareNum = regexp.MustCompile(`^\d+(\.\d+)?$`)
+	sizeRe  = regexp.MustCompile(`^\d+(B|kB|KiB|MB|MiB|GB|GiB|TB|TiB)?$`)
+	bareNum = regexp.MustCompile(`^\d+$`)
 )
 
 func validateSize(s string) error {
@@ -246,18 +249,41 @@ func validateSize(s string) error {
 		return nil
 	}
 	if !sizeRe.MatchString(strings.TrimSpace(s)) {
-		return fmt.Errorf("enter a number (the field's unit) or a size like 2GiB / 512MiB")
+		return fmt.Errorf("use a whole number, or a size like 2GiB / 512MiB (no spaces or decimals)")
 	}
 	return nil
 }
 
-// withUnit appends defUnit to a bare numeric size (e.g. "2048" → "2048MiB") so a plain
-// number is read in the unit the field advertises — Incus treats a unit-less value as
-// bytes. Values that already carry a unit (and the empty string) pass through unchanged.
+// withUnit appends defUnit to a bare whole-number size (e.g. "2048" → "2048MiB") so a
+// plain number is read in the unit the field advertises — Incus treats a unit-less value
+// as bytes. Values that already carry a unit (and the empty string) pass through.
 func withUnit(s, defUnit string) string {
 	s = strings.TrimSpace(s)
 	if s != "" && bareNum.MatchString(s) {
 		return s + defUnit
 	}
 	return s
+}
+
+// normalizeMem renders a unit-less byte count (a limits.memory set out-of-band, which is
+// valid in Incus) as a unit-bearing string, so the edit field never starts as a bare
+// number that withUnit would later rescale by 1024² when re-submitted untouched.
+func normalizeMem(s string) string {
+	s = strings.TrimSpace(s)
+	if !bareNum.MatchString(s) {
+		return s // already has a unit (or is empty/odd) — leave it
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n <= 0 {
+		return s
+	}
+	const mib = 1024 * 1024
+	switch {
+	case n%(1024*mib) == 0:
+		return fmt.Sprintf("%dGiB", n/(1024*mib))
+	case n%mib == 0:
+		return fmt.Sprintf("%dMiB", n/mib)
+	default:
+		return fmt.Sprintf("%dB", n) // exact bytes, but unit-bearing so withUnit leaves it
+	}
 }

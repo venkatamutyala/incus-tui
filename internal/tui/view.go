@@ -172,9 +172,11 @@ func allCols() []colSpec {
 	return []colSpec{
 		{title: "NAME", min: 12, flex: true, cell: func(v xincus.VM) string { return v.Name }},
 		{title: "STATUS", min: 11, cell: func(v xincus.VM) string {
-			// Glyph + color so state reads at a glance (and without relying on color alone).
-			return lipgloss.NewStyle().Foreground(statusColor(v.StatusCode)).
-				Render(statusGlyph(v.StatusCode) + " " + v.Status)
+			// Glyph (not color) for at-a-glance state: a per-cell color emits a reset that
+			// terminates the table's row-level selection highlight mid-line, leaving every
+			// column to the right of STATUS unhighlighted on the cursor row. The glyph alone
+			// distinguishes states (and color still lives in the detail pane).
+			return statusGlyph(v.StatusCode) + " " + v.Status
 		}},
 		{title: "IPV4", min: 15, cell: func(v xincus.VM) string { return orDash(v.IPv4) }},
 		{title: "IMAGE", min: 12, flex: true, cell: func(v xincus.VM) string { return orDash(v.Image) }},

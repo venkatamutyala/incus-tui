@@ -40,13 +40,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 echo "Downloading ${asset} (${VERSION})…"
-curl -fSL --proto '=https' "${base}/${asset}" -o "${tmp}/${asset}" \
+curl -fSL --proto '=https' --proto-redir '=https' "${base}/${asset}" -o "${tmp}/${asset}" \
 	|| err "download failed: ${base}/${asset}"
 
 # --- Verify the download (fail closed) ---------------------------------------
 # checksums.txt ships with every release and is REQUIRED: a fetch failure is a hard
 # error, never a silent skip.
-curl -fSL --proto '=https' "${base}/checksums.txt" -o "${tmp}/checksums.txt" \
+curl -fSL --proto '=https' --proto-redir '=https' "${base}/checksums.txt" -o "${tmp}/checksums.txt" \
 	|| err "could not download checksums.txt — refusing to install unverified"
 
 # Authenticity: cosign keyless verification (no key, no login) proves checksums.txt was
@@ -60,7 +60,7 @@ if command -v cosign >/dev/null 2>&1; then
 	cosign_major="$(cosign version 2>/dev/null | sed -n 's/.*GitVersion:[[:space:]]*v\{0,1\}\([0-9][0-9]*\).*/\1/p' | head -1)"
 fi
 if [ -n "$cosign_major" ] && [ "$cosign_major" -ge 3 ] 2>/dev/null; then
-	curl -fSL --proto '=https' "${base}/checksums.txt.bundle" -o "${tmp}/checksums.txt.bundle" \
+	curl -fSL --proto '=https' --proto-redir '=https' "${base}/checksums.txt.bundle" -o "${tmp}/checksums.txt.bundle" \
 		|| err "cosign is installed but checksums.txt.bundle is missing — refusing to install"
 	# Bind to this repo's release.yml at a v* tag. Dots are escaped so they match
 	# literally rather than any character.

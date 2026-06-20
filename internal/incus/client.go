@@ -7,6 +7,7 @@ package incus
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	incusclient "github.com/lxc/incus/v7/client"
 )
@@ -22,6 +23,8 @@ const (
 // connection to the public image server.
 type Client struct {
 	server incusclient.InstanceServer
+
+	mu     sync.Mutex // guards the lazy images cache against a quit-during-image-load race
 	images incusclient.ImageServer
 }
 
@@ -37,6 +40,8 @@ func Connect() (*Client, error) {
 
 // imageServer returns a cached connection to the public simplestreams image server.
 func (c *Client) imageServer() (incusclient.ImageServer, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.images != nil {
 		return c.images, nil
 	}
@@ -64,6 +69,8 @@ func (c *Client) Disconnect() {
 	if c.server != nil {
 		c.server.Disconnect()
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.images != nil {
 		c.images.Disconnect()
 	}

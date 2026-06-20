@@ -18,7 +18,6 @@ type styles struct {
 	toastOK    lipgloss.Style
 	toastErr   lipgloss.Style
 	stale      lipgloss.Style
-	good       lipgloss.Style
 	dim        lipgloss.Style
 	detailKey  lipgloss.Style
 	box        lipgloss.Style
@@ -33,7 +32,6 @@ func newStyles() styles {
 		toastOK:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")),
 		toastErr:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")),
 		stale:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("214")).Padding(0, 1),
-		good:       lipgloss.NewStyle().Foreground(lipgloss.Color("42")),
 		dim:        lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 		detailKey:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63")),
 		box:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1),

@@ -326,6 +326,7 @@ func (m model) handleListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if v, ok := m.current(); ok {
 			m.selectedName = v.Name
 			m.mode = modeDetail
+			m.layout() // size the detail viewport for this mode's 1-line help bar
 			m.refreshDetail()
 			m.detail.GotoTop() // start a freshly-opened VM at the top, not a stale offset
 		}
@@ -343,6 +344,7 @@ func (m model) handleDetailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(k, m.keys.Back), key.Matches(k, m.keys.Quit):
 		m.mode = modeList
+		m.layout() // re-reserve the help-bar rows for the list view
 		return m, nil
 	case key.Matches(k, m.keys.Bottom):
 		m.detail.GotoBottom()
@@ -382,6 +384,7 @@ func (m model) handleLogsKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(k, m.keys.Back), key.Matches(k, m.keys.Quit):
 		m.mode = modeList
+		m.layout() // re-reserve the help-bar rows for the list view
 		return m, nil
 	case key.Matches(k, m.keys.Refresh):
 		if m.logsShowCloudInit {
@@ -620,6 +623,7 @@ func (m model) openLogs() (tea.Model, tea.Cmd) {
 	m.selectedName = v.Name
 	m.logsShowCloudInit = false
 	m.mode = modeLogs
+	m.layout() // size the logs viewport for this mode's 1-line help bar
 	m.logs.SetContent("loading console log…")
 	return m, fetchConsoleLog(m.client, v.Name)
 }

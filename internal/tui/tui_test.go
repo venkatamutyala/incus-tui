@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 
 	xincus "github.com/venkatamutyala/incus-tui/internal/incus"
@@ -71,7 +72,7 @@ func TestWithUnit(t *testing.T) {
 	cases := []struct{ in, unit, want string }{
 		{"2048", "MiB", "2048MiB"}, // bare int → unit appended
 		{"12", "GiB", "12GiB"},
-		{"1.5", "GiB", "1.5GiB"},     // bare decimal
+		{"1.5", "GiB", "1.5"},        // decimal is NOT a bare int → unchanged (validateSize rejects it inline)
 		{"2GiB", "MiB", "2GiB"},      // already has a unit → unchanged
 		{"512MiB", "GiB", "512MiB"},  // already has a unit → unchanged
 		{" 1024 ", "MiB", "1024MiB"}, // trimmed
@@ -139,10 +140,64 @@ func TestMemCell(t *testing.T) {
 	}
 }
 
+func TestValidateSize(t *testing.T) {
+	ok := []string{"", "2048", "12", "2GiB", "512MiB", "100GB"}
+	bad := []string{"1.5", "1.5GiB", "2 GiB", "2gib", "abc", "12GiBx"}
+	for _, s := range ok {
+		if err := validateSize(s); err != nil {
+			t.Errorf("validateSize(%q) rejected, want accepted: %v", s, err)
+		}
+	}
+	for _, s := range bad {
+		if err := validateSize(s); err == nil {
+			t.Errorf("validateSize(%q) accepted, want rejected (Incus would reject it)", s)
+		}
+	}
+}
+
+func TestNormalizeMem(t *testing.T) {
+	cases := map[string]string{
+		"2147483648": "2GiB",        // 2 GiB in bytes → readable, and unit-bearing so withUnit won't rescale
+		"536870912":  "512MiB",      // 512 MiB in bytes
+		"1500000000": "1500000000B", // not cleanly divisible → exact bytes, still unit-bearing
+		"2GiB":       "2GiB",        // already has a unit → unchanged
+		"":           "",            // empty stays empty
+	}
+	for in, want := range cases {
+		if got := normalizeMem(in); got != want {
+			t.Errorf("normalizeMem(%q) = %q, want %q", in, got, want)
+		}
+		// And the key property: re-applying withUnit to the normalized value is a no-op.
+		if n := normalizeMem(in); n != "" && withUnit(n, "MiB") != n {
+			t.Errorf("withUnit(normalizeMem(%q)) rescaled %q → %q", in, n, withUnit(n, "MiB"))
+		}
+	}
+}
+
+// Pins the launch form → CreateSpec contract: bare numbers get the field's unit, the rest
+// map straight through. A regression here would silently mis-size every launched VM.
+func TestLaunchSpecMapping(t *testing.T) {
+	m := testModel()
+	m.formKind = formLaunch
+	m.vars = &formVars{name: "vm1", imageFP: "fp123", cpu: "2", mem: "2048", disk: "12", cloud: "#cloud-config\n"}
+	m2, _ := m.completeForm()
+	spec := m2.(model).pendingLaunch
+	if spec.Name != "vm1" || spec.ImageFingerprint != "fp123" || spec.CPU != "2" {
+		t.Errorf("name/image/cpu mismatch: %+v", spec)
+	}
+	if spec.Memory != "2048MiB" {
+		t.Errorf("Memory = %q, want 2048MiB", spec.Memory)
+	}
+	if spec.DiskSize != "12GiB" {
+		t.Errorf("DiskSize = %q, want 12GiB", spec.DiskSize)
+	}
+}
+
 func testModel() *model {
 	m := &model{width: 100}
 	m.table = table.New()
 	m.filterInput = textinput.New()
+	m.editor = textarea.New()
 	return m
 }
 
