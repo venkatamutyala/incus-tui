@@ -66,6 +66,9 @@ func (m model) headerLine() string {
 		ctx = "logs · " + m.selectedName
 	case modeForm:
 		ctx = "launch / action"
+		if m.formKind == formResizePool {
+			ctx = "storage · resize pool"
+		}
 	case modeLaunchEdit:
 		ctx = "cloud-init editor"
 	}

@@ -47,6 +47,7 @@ type model struct {
 
 	vms      []xincus.VM
 	filtered []xincus.VM
+	pools    []xincus.StoragePool // storage pools (for the resize form); refreshed on each tick
 
 	width, height int
 	mode          mode
@@ -74,10 +75,11 @@ type model struct {
 	events     chan xincus.Event
 	eventsDone chan struct{}
 
-	ready      bool
-	loadingVMs bool // a periodic ListVMs is in flight (avoids pile-up on a slow daemon)
-	fatalErr   error
-	quitting   bool
+	ready        bool
+	loadingVMs   bool // a periodic ListVMs is in flight (avoids pile-up on a slow daemon)
+	loadingPools bool // a periodic ListStoragePools is in flight (same pile-up guard)
+	fatalErr     error
+	quitting     bool
 }
 
 // New constructs the root model wired to a connected Incus client.
@@ -124,7 +126,7 @@ func New(c *xincus.Client) model {
 
 func (m model) Init() tea.Cmd {
 	go m.client.WatchEvents(m.events, m.eventsDone)
-	return tea.Batch(loadVMs(m.client), tickCmd(), waitForEvent(m.events), m.spinner.Tick)
+	return tea.Batch(loadVMs(m.client), loadPools(m.client), tickCmd(), waitForEvent(m.events), m.spinner.Tick)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -160,7 +162,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Sequence periodicLoad (pointer receiver, mutates m) before returning m so
 		// the loadingVMs flag is captured in the returned model, not lost to copy order.
 		cmd := m.periodicLoad()
-		cmds := []tea.Cmd{tickCmd(), cmd}
+		poolCmd := m.periodicLoadPools() // pointer receiver; sequenced before return m so its flag persists
+		cmds := []tea.Cmd{tickCmd(), cmd, poolCmd}
 		if m.mode == modeLogs && m.logsAuto {
 			if m.logsShowCloudInit {
 				cmds = append(cmds, fetchCloudInit(m.client, m.selectedName))
@@ -195,6 +198,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.err == nil && msg.action == "resize":
 			// limits.cpu hotplugs, but a running VM needs a reboot to pick up new memory.
 			cmd = m.setToast("resize "+msg.name+" — restart the VM to apply new memory", false)
+		case msg.err == nil && msg.action == "resize-pool":
+			cmd = m.setToast("grew pool "+msg.name, false)
 		case msg.err == nil:
 			cmd = m.setToast(msg.action+" "+msg.name, false)
 		case errors.Is(msg.err, context.Canceled):
@@ -202,7 +207,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			cmd = m.setToast(msg.action+" "+msg.name+": "+msg.err.Error(), true)
 		}
-		return m, tea.Batch(loadVMs(m.client), cmd)
+		cmds := []tea.Cmd{loadVMs(m.client), cmd}
+		if msg.action == "resize-pool" {
+			cmds = append(cmds, loadPools(m.client)) // reflect the new size immediately
+		}
+		return m, tea.Batch(cmds...)
 
 	case launchDataMsg:
 		if m.mode != modeBusy { // user aborted while loading
@@ -229,6 +238,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cloudInitMsg:
 		if m.mode == modeLogs && m.logsShowCloudInit && msg.name == m.selectedName {
 			m.setLogsContent(msg.content, msg.err, "(no cloud-init output)")
+		}
+		return m, nil
+
+	case storagePoolsMsg:
+		m.loadingPools = false
+		// Pools are secondary data: on error keep the prior list rather than disrupting
+		// the screen — a transient daemon hiccup shouldn't blank the resize picker.
+		if msg.err == nil {
+			m.pools = msg.pools
 		}
 		return m, nil
 
@@ -427,6 +445,10 @@ func (m model) handleAction(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	case key.Matches(k, m.keys.Launch):
 		mm, cmd := m.startLaunch()
 		return mm, cmd, true
+	case key.Matches(k, m.keys.Resize):
+		// Host-scoped (a pool isn't tied to a VM), so it works even with no VM selected.
+		mm, cmd := m.openResizePool()
+		return mm, cmd, true
 	case key.Matches(k, m.keys.Shell):
 		mm, cmd := m.startShell()
 		return mm, cmd, true
@@ -520,6 +542,24 @@ func (m model) openSnapshotManager() (tea.Model, tea.Cmd) {
 	return m, m.form.Init()
 }
 
+func (m model) openResizePool() (tea.Model, tea.Cmd) {
+	hasResizable := false
+	for _, p := range m.pools {
+		if p.Resizable {
+			hasResizable = true
+			break
+		}
+	}
+	if !hasResizable {
+		return m, toastAfter("no resizable storage pools (none are loop-backed)", true)
+	}
+	form, vars := newResizePoolForm(m.pools)
+	m.formKind, m.vars = formResizePool, vars
+	m.form = form.WithWidth(formWidth(m.width)).WithHeight(max(8, m.height-5))
+	m.mode = modeForm
+	return m, m.form.Init()
+}
+
 func (m model) completeForm() (tea.Model, tea.Cmd) {
 	kind, vars, name := m.formKind, m.vars, m.selectedName
 	m.form, m.formKind = nil, formNone
@@ -540,6 +580,8 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		})
 	case formSnapManage:
 		return m.completeSnapManage(name, vars)
+	case formResizePool:
+		return m.completeResizePool(vars)
 	case formLaunch:
 		m.pendingLaunch = xincus.CreateSpec{
 			Name:             vars.name,
@@ -590,6 +632,18 @@ func (m model) completeSnapManage(name string, vars *formVars) (tea.Model, tea.C
 	}
 	m.mode = modeList
 	return m, nil
+}
+
+func (m model) completeResizePool(vars *formVars) (tea.Model, tea.Cmd) {
+	if !vars.confirm {
+		m.mode = modeList
+		return m, m.setToast("pool resize cancelled", false)
+	}
+	pool := vars.pool
+	size := withUnit(strings.TrimSpace(vars.size), "GiB")
+	return m.busy("resize-pool", pool, func(ctx context.Context) error {
+		return m.client.ResizeStoragePool(ctx, pool, size)
+	})
 }
 
 func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -720,6 +774,19 @@ func (m *model) periodicLoad() tea.Cmd {
 	}
 	m.loadingVMs = true
 	return loadVMs(m.client)
+}
+
+// periodicLoadPools mirrors periodicLoad for the storage-pool list: it skips a refresh
+// when one is already in flight, so a slow daemon can't accumulate overlapping
+// ListStoragePools calls (an N+1 — one resources round-trip per pool) from the 3s tick.
+// The flag is cleared when the storagePoolsMsg lands. Direct callers (Init, the
+// resize-pool refresh) bypass it, like the direct loadVMs callers.
+func (m *model) periodicLoadPools() tea.Cmd {
+	if m.loadingPools {
+		return nil
+	}
+	m.loadingPools = true
+	return loadPools(m.client)
 }
 
 // --- helpers -----------------------------------------------------------------

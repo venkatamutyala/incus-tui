@@ -18,6 +18,11 @@ type vmsMsg struct {
 	err error
 }
 
+type storagePoolsMsg struct {
+	pools []xincus.StoragePool
+	err   error
+}
+
 type opDoneMsg struct {
 	action string
 	name   string
@@ -61,6 +66,13 @@ func loadVMs(c *xincus.Client) tea.Cmd {
 	return func() tea.Msg {
 		vms, err := c.ListVMs()
 		return vmsMsg{vms: vms, err: err}
+	}
+}
+
+func loadPools(c *xincus.Client) tea.Cmd {
+	return func() tea.Msg {
+		pools, err := c.ListStoragePools()
+		return storagePoolsMsg{pools: pools, err: err}
 	}
 }
 

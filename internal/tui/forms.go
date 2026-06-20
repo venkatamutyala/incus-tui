@@ -34,6 +34,7 @@ const (
 	formEdit
 	formSnapManage
 	formDelete
+	formResizePool
 )
 
 // formVars holds form-bound values on the heap so huh's pointer bindings stay valid
@@ -46,6 +47,8 @@ type formVars struct {
 	imageFP string
 	cloud   string
 	action  string // snapshot manager: "create" | "restore:<snap>" | "delete:<snap>"
+	pool    string // storage-pool resize: the pool to grow
+	size    string // storage-pool resize: the requested new size
 	confirm bool
 }
 
@@ -166,6 +169,56 @@ func newSnapManageForm(vm xincus.VM) (*huh.Form, *formVars) {
 	return applyEscKeymap(form), v
 }
 
+// newResizePoolForm builds the storage-pool resize flow: pick a resizable pool (with its
+// live usage shown), enter a new size, confirm. It mirrors newSnapManageForm's
+// Select→input→confirm shape. Loop-backed pools only grow, which the confirm copy states
+// and the service layer enforces. The caller guarantees at least one resizable pool.
+func newResizePoolForm(pools []xincus.StoragePool) (*huh.Form, *formVars) {
+	v := &formVars{}
+	resizable := make([]xincus.StoragePool, 0, len(pools))
+	opts := make([]huh.Option[string], 0, len(pools))
+	for _, p := range pools {
+		if !p.Resizable {
+			continue
+		}
+		resizable = append(resizable, p)
+		opts = append(opts, huh.NewOption(fmt.Sprintf("%s — %s · %s / %s (%d%%)",
+			p.Name, p.Driver, formatBytes(p.UsedBytes), formatBytes(p.TotalBytes), p.UsedPct()), p.Name))
+	}
+	curSize := ""
+	if len(resizable) > 0 {
+		v.pool = resizable[0].Name
+		curSize = resizable[0].SizeConfig
+	}
+	sizeOf := func(name string) string {
+		for _, p := range resizable {
+			if p.Name == name {
+				return p.SizeConfig
+			}
+		}
+		return ""
+	}
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().Key("pool").
+				Title("Storage pool to grow").Options(opts...).Value(&v.pool),
+		),
+		huh.NewGroup(
+			huh.NewInput().Key("size").Title("New size (GiB)").Placeholder(curSize).
+				Value(&v.size).Validate(validateNewSize),
+		),
+		huh.NewGroup(
+			huh.NewConfirm().Key("ok").
+				TitleFunc(func() string {
+					return fmt.Sprintf("Grow pool %q from %s to %s? Pools can only grow, never shrink.",
+						v.pool, sizeOf(v.pool), withUnit(strings.TrimSpace(v.size), "GiB"))
+				}, &v.size).
+				Affirmative("Grow").Negative("Cancel").Value(&v.confirm),
+		),
+	)
+	return applyEscKeymap(form), v
+}
+
 func newDeleteForm(vm xincus.VM) (*huh.Form, *formVars) {
 	v := &formVars{}
 	title := fmt.Sprintf("Delete VM %q? This is irreversible.", vm.Name)
@@ -249,6 +302,14 @@ func validateSize(s string) error {
 		return fmt.Errorf("use a whole number, or a size like 2GiB / 512MiB (no spaces or decimals)")
 	}
 	return nil
+}
+
+// validateNewSize is validateSize but required — a pool resize must name a target size.
+func validateNewSize(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("enter a new size, e.g. 2TiB or 2048 (GiB)")
+	}
+	return validateSize(s)
 }
 
 // withUnit appends defUnit to a bare whole-number size (e.g. "2048" → "2048MiB") so a

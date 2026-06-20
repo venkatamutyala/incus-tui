@@ -55,6 +55,11 @@ The Incus client mirrors a guest command's stdout and stderr on **separate gorou
   embedded spaces (`2 GiB`) — `validateSize` enforces whole-number-plus-unit only.
 - The edit-cpu/ram form seeds memory through `normalizeMem()`, so a pre-existing **bare-byte**
   `limits.memory` isn't re-scaled by `withUnit` when re-submitted untouched.
+- **Storage-pool resize** (`ResizeStoragePool`, `internal/incus/storage.go`): a loop-backed pool can
+  only **grow**, never shrink — `growOnly()` rejects a smaller size before the call (Incus rejects it
+  too, less clearly). Only pools with a `size` config key (`Resizable`) are loop-backed; a `dir` pool
+  has none. Unlike instance updates, `UpdateStoragePool` is **synchronous** — it returns no Operation,
+  so there is **no `waitOp`** in that path.
 
 ## Signing / release
 
@@ -79,7 +84,9 @@ The Incus client mirrors a guest command's stdout and stderr on **separate gorou
   `loadVMs()` callers (`Init`, the `R` refresh key, `opDoneMsg`, `execDoneMsg`) deliberately bypass
   it, and any `vmsMsg` clears the flag — so loads aren't strictly serialized when a direct load
   interleaves a tick load. For true single-flight, route direct callers through `periodicLoad()` or
-  use an in-flight counter, not a bool.
+  use an in-flight counter, not a bool. The storage-pool list has the **same** guard
+  (`loadingPools` / `periodicLoadPools()`), because `ListStoragePools` is an N+1 (a resources
+  round-trip per pool) and would otherwise pile up on the 3s tick against a slow daemon.
 - AltScreen is set on **each** `tea.View` (`v.AltScreen = true` in `View()`), not via a program
   option — there is intentionally no `tea.WithAltScreen()`. Every render path must set it.
 - `copy IP` (`y`) is an optimistic OSC52 write (`tea.SetClipboard`); the "copied" toast does **not**

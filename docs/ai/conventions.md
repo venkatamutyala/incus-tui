@@ -34,6 +34,9 @@ Then:
 2. Add a `key.Matches(k, m.keys.X)` case in `handleAction` (model.go) — this auto-wires it into
    **both** the list and detail views.
 3. Resolve the target VM with `m.activeVM()` (not `m.current()`) so it works from list and detail/logs.
+   **Host-scoped** actions are the exception — a storage pool isn't tied to a VM, so `P` (resize pool)
+   and `n` (launch) skip `activeVM()` and read host data instead (the resize form is built from the
+   `m.pools` cache that the tick refreshes), which is why they still work with **zero** VMs.
 4. Add the binding to `ShortHelp` and/or `FullHelp` (keys.go) so it shows in the cheat sheet; update
    the detail-mode hint string in `bottomBar()` (view.go) if you want it advertised there too.
 5. For a plain lifecycle op reuse `m.actionOp("x", (*xincus.Client).X)`; otherwise wrap the call in

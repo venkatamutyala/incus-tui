@@ -31,6 +31,9 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
   operations can be cancelled with `esc`.
 - **Snapshots** — create, **restore**, and delete from a snapshot manager (`p`).
 - **Edit CPU/RAM** on an existing VM (`limits.cpu` / `limits.memory`).
+- **Grow a storage pool** (`P`) — when a loop-backed pool (btrfs/zfs/lvm on a file) is filling
+  up, resize it in place from a form that shows each pool's live usage. Pools can only grow,
+  never shrink.
 - **Copy a VM's IP** to the clipboard (`y`; OSC52, works over SSH).
 - **Shell in** (`s`) — runs `incus exec <vm>` (bash, falling back to `sh`), gated on
   guest-agent readiness. The bare binary needs the `incus` CLI on `PATH`; the Docker image
@@ -42,8 +45,9 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
   live in `~/.config/incus-tui/templates` (seeded with starters).
 - **Fuzzy filter** (`/`), responsive columns, contextual help bar, and a full cheat sheet (`?`).
 
-The TUI is **storage-agnostic** — it manages whatever Incus is configured with and resolves
-the launch disk pool from your default profile.
+The TUI is **storage-agnostic** — it manages whatever Incus is configured with, resolves the
+launch disk pool from your default profile, and can **grow a loop-backed pool** in place (`P`)
+when it runs low on space.
 
 ## Keybindings
 
@@ -56,6 +60,7 @@ the launch disk pool from your default profile.
 | `/` | fuzzy filter | `f` | pause / resume |
 | `?` | full help | `p` | snapshots (create/restore/delete) |
 | `R` | refresh | `e` `y` `d` | edit cpu·ram / copy IP / delete |
+| | | `P` | resize (grow) a storage pool |
 
 In the launch wizard, `ctrl+s` launches from the cloud-init editor and `esc` steps back.
 During a long operation, `esc` cancels it.
