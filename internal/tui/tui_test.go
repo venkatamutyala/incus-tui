@@ -85,6 +85,30 @@ func TestWithUnit(t *testing.T) {
 	}
 }
 
+func TestClampLines(t *testing.T) {
+	if got := clampLines("a\nb\nc\nd", 2); got != "a\nb" {
+		t.Errorf("clampLines 4->2 = %q, want \"a\\nb\"", got)
+	}
+	if got := clampLines("a\nb", 5); got != "a\nb" {
+		t.Errorf("clampLines fewer-than-n = %q, want unchanged", got)
+	}
+	if got := clampLines("a\nb\nc", 0); got != "a" { // n<1 floored to 1
+		t.Errorf("clampLines n=0 = %q, want \"a\"", got)
+	}
+}
+
+func TestFormWidth(t *testing.T) {
+	// content + box border/padding (4) must never exceed the terminal width.
+	for _, w := range []int{24, 30, 50, 80, 200} {
+		if fw := formWidth(w); fw+4 > w {
+			t.Errorf("formWidth(%d)=%d → box %d overflows terminal %d", w, fw, fw+4, w)
+		}
+	}
+	if formWidth(10) < 20 { // floor keeps the form usable on tiny terminals
+		t.Errorf("formWidth floor not applied: %d", formWidth(10))
+	}
+}
+
 func testModel() *model {
 	m := &model{width: 100}
 	m.table = table.New()

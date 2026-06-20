@@ -98,7 +98,7 @@ func New(c *xincus.Client) model {
 	tbl.KeyMap.HalfPageUp.SetEnabled(false)
 	tbl.KeyMap.HalfPageDown.SetEnabled(false)
 
-	return model{
+	m := model{
 		client:      c,
 		styles:      st,
 		keys:        defaultKeys(),
@@ -114,6 +114,11 @@ func New(c *xincus.Client) model {
 		events:      make(chan xincus.Event, 32),
 		eventsDone:  make(chan struct{}),
 	}
+	// Wrap long lines (wide image labels, joined snapshot lists, long console-log lines)
+	// instead of clipping them off the right edge.
+	m.detail.SoftWrap = true
+	m.logs.SoftWrap = true
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -199,7 +204,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		vars := &formVars{cpu: "2", mem: "2048", disk: "12"}
 		m.vars, m.formKind = vars, formLaunch
 		m.form = newLaunchForm(msg.images, msg.templates, vars).
-			WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-5))
+			WithWidth(formWidth(m.width)).WithHeight(max(12, m.height-5))
 		m.mode = modeForm
 		return m, m.form.Init()
 
@@ -319,6 +324,7 @@ func (m model) handleListKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.selectedName = v.Name
 			m.mode = modeDetail
 			m.refreshDetail()
+			m.detail.GotoTop() // start a freshly-opened VM at the top, not a stale offset
 		}
 		return m, nil
 	}
@@ -334,10 +340,6 @@ func (m model) handleDetailKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(k, m.keys.Back), key.Matches(k, m.keys.Quit):
 		m.mode = modeList
-		return m, nil
-	case key.Matches(k, m.keys.Help):
-		m.help.ShowAll = !m.help.ShowAll
-		m.layout()
 		return m, nil
 	case key.Matches(k, m.keys.Bottom):
 		m.detail.GotoBottom()
@@ -483,7 +485,7 @@ func (m model) openForm(kind formKind) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.formKind, m.vars, m.selectedName = kind, vars, v.Name
-	m.form = form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-5))
+	m.form = form.WithWidth(formWidth(m.width)).WithHeight(max(8, m.height-5))
 	m.mode = modeForm
 	return m, m.form.Init()
 }
@@ -495,7 +497,7 @@ func (m model) openSnapshotManager() (tea.Model, tea.Cmd) {
 	}
 	form, vars := newSnapManageForm(v)
 	m.formKind, m.vars, m.selectedName = formSnapManage, vars, v.Name
-	m.form = form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-5))
+	m.form = form.WithWidth(formWidth(m.width)).WithHeight(max(8, m.height-5))
 	m.mode = modeForm
 	return m, m.form.Init()
 }
@@ -529,7 +531,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 			DiskSize:         withUnit(vars.disk, "GiB"),
 		}
 		m.editor.SetValue(vars.cloud)
-		m.editor.SetWidth(max(20, m.width-4))
+		m.editor.SetWidth(min(m.width, max(20, m.width-4)))
 		m.editor.SetHeight(max(6, m.height-8))
 		m.mode = modeLaunchEdit
 		return m, m.editor.Focus()
@@ -576,7 +578,7 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vars.cloud = m.editor.Value()
 			m.formKind = formLaunch
 			m.form = newLaunchForm(m.launchImages, m.launchTemplates, m.vars).
-				WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-5))
+				WithWidth(formWidth(m.width)).WithHeight(max(12, m.height-5))
 			m.mode = modeForm
 			return m, m.form.Init()
 		case "ctrl+s":
@@ -702,8 +704,28 @@ func (m *model) periodicLoad() tea.Cmd {
 // using a sequence id so a stale timer can't clear a newer toast.
 func (m *model) setToast(text string, isErr bool) tea.Cmd {
 	m.toastSeq++
-	m.toast, m.toastErr = text, isErr
+	// Collapse whitespace (incl. newlines) to a single line — a multi-line toast (e.g. a
+	// YAML or daemon error) would otherwise grow the status row and clip the help bar off
+	// the bottom of the fixed-height frame.
+	m.toast, m.toastErr = strings.Join(strings.Fields(text), " "), isErr
 	return clearToastCmd(m.toastSeq)
+}
+
+// helpRows is the number of lines the bottom help bar occupies. The multi-line cheat
+// sheet is only rendered in the list/busy views, so reserve it only there; everywhere
+// else (and on short terminals where it wouldn't fit) it stays a single line. layout()
+// reserves exactly this and bottomBar() never exceeds it, keeping the frame at m.height.
+func (m model) helpRows() int {
+	if m.help.ShowAll && (m.mode == modeList || m.mode == modeBusy) {
+		return min(6, max(1, m.height-5))
+	}
+	return 1
+}
+
+// formWidth is a huh-form content width that still fits the terminal once wrapped in
+// styles.box (border+padding = 4 cols), so narrow windows don't overflow.
+func formWidth(termW int) int {
+	return max(20, termW-4)
 }
 
 func (m *model) setLogsContent(content string, err error, empty string) {
@@ -817,14 +839,7 @@ func (m *model) layout() {
 		return
 	}
 	m.help.SetWidth(m.width)
-	helpH := 1
-	if m.help.ShowAll {
-		helpH = min(6, max(1, m.height-5))
-	}
-	bodyH := max(3, m.height-2-helpH) // header line + status line
-	if !m.help.ShowAll && bodyH > m.height-3 {
-		bodyH = m.height - 3
-	}
+	bodyH := max(1, m.height-2-m.helpRows()) // header line + status line
 
 	m.table.SetWidth(m.width)
 	m.table.SetHeight(bodyH)
@@ -837,10 +852,10 @@ func (m *model) layout() {
 	m.logs.SetHeight(bodyH)
 
 	m.filterInput.SetWidth(max(10, m.width-12))
-	m.editor.SetWidth(max(20, m.width-4))
+	m.editor.SetWidth(min(m.width, max(20, m.width-4)))
 	m.editor.SetHeight(max(6, m.height-8))
 
 	if m.form != nil {
-		m.form = m.form.WithWidth(max(40, m.width-4)).WithHeight(max(8, m.height-5))
+		m.form = m.form.WithWidth(formWidth(m.width)).WithHeight(max(8, m.height-5))
 	}
 }

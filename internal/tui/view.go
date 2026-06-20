@@ -92,7 +92,7 @@ func (m model) statusLine() string {
 	}
 
 	var mid string
-	if m.toast != "" {
+	if m.mode != modeBusy && m.toast != "" {
 		if m.toastErr {
 			mid = m.styles.toastErr.Render(m.toast)
 		} else {
@@ -108,24 +108,45 @@ func (m model) statusLine() string {
 func (m model) bottomBar() string {
 	switch m.mode {
 	case modeForm:
-		return m.styles.help.Render("tab/enter next · esc cancel")
+		return m.styles.help.Render("esc cancel · tab/enter next")
 	case modeLaunchEdit:
-		return m.styles.help.Render("ctrl+s launch · esc back to options")
+		return m.styles.help.Render("esc back to options · ctrl+s launch")
 	case modeDetail:
-		return m.styles.help.Render("e edit · p snapshot · l logs · y copy IP · s shell · d delete · esc back")
+		// esc-first so the escape hatch survives the renderer's right-edge clip on a
+		// narrow terminal.
+		return m.styles.help.Render("esc back · e edit · p snapshot · l logs · y copy IP · s shell · d delete")
 	case modeLogs:
 		view := "console"
 		if m.logsShowCloudInit {
 			view = "cloud-init"
 		}
-		return m.styles.help.Render("c toggle [" + view + "] · R refresh · ↑/↓ scroll · esc back")
+		return m.styles.help.Render("esc back · c toggle [" + view + "] · R refresh · ↑/↓ scroll")
 	default:
-		return m.help.View(m.keys)
+		// Never let the cheat sheet exceed its reserved rows, or it would clip the bottom
+		// of the frame (status line) on a short terminal.
+		return clampLines(m.help.View(m.keys), m.helpRows())
 	}
 }
 
+// clampLines keeps at most n leading lines so a rendered block can't exceed its budget.
+func clampLines(s string, n int) string {
+	if n < 1 {
+		n = 1
+	}
+	if lines := strings.Split(s, "\n"); len(lines) > n {
+		return strings.Join(lines[:n], "\n")
+	}
+	return s
+}
+
 func (m model) fatalScreen() string {
-	return m.styles.box.Render(
+	// Bound the box so a long error wraps inside the border instead of overflowing the
+	// terminal and shattering the rounded border.
+	box := m.styles.box
+	if m.width > 4 {
+		box = box.Width(min(m.width-2, 72))
+	}
+	return box.Render(
 		m.styles.toastErr.Render("Cannot reach the Incus daemon.") + "\n\n" +
 			m.fatalErr.Error() + "\n\n" +
 			m.styles.dim.Render("Is the daemon running? Try: scripts/start-incusd.sh") + "\n" +
