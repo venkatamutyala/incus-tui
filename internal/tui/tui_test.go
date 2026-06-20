@@ -67,6 +67,24 @@ func TestVisibleColsDropsAndStaysAligned(t *testing.T) {
 	}
 }
 
+func TestWithUnit(t *testing.T) {
+	cases := []struct{ in, unit, want string }{
+		{"2048", "MiB", "2048MiB"}, // bare int → unit appended
+		{"12", "GiB", "12GiB"},
+		{"1.5", "GiB", "1.5GiB"},     // bare decimal
+		{"2GiB", "MiB", "2GiB"},      // already has a unit → unchanged
+		{"512MiB", "GiB", "512MiB"},  // already has a unit → unchanged
+		{" 1024 ", "MiB", "1024MiB"}, // trimmed
+		{"", "MiB", ""},              // empty stays empty (omitted limit)
+		{"abc", "MiB", "abc"},        // non-numeric passes through (validator rejects upstream)
+	}
+	for _, c := range cases {
+		if got := withUnit(c.in, c.unit); got != c.want {
+			t.Errorf("withUnit(%q,%q) = %q, want %q", c.in, c.unit, got, c.want)
+		}
+	}
+}
+
 func testModel() *model {
 	m := &model{width: 100}
 	m.table = table.New()

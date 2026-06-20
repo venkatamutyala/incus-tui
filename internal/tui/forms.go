@@ -43,16 +43,31 @@ func applyEscKeymap(f *huh.Form) *huh.Form {
 }
 
 func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVars) *huh.Form {
+	// Images are normally pre-filtered to the host architecture, so repeating the arch
+	// on every row is just clutter down the right edge. Show it once in the title and
+	// keep it per-row only if the list is somehow mixed.
+	arch, mixed := "", false
+	for i, im := range images {
+		if i == 0 {
+			arch = im.Arch
+		} else if im.Arch != arch {
+			mixed = true
+		}
+	}
 	imgOpts := make([]huh.Option[string], 0, len(images))
 	for _, im := range images {
 		label := im.Alias
 		if label == "" {
 			label = im.Fingerprint[:min(12, len(im.Fingerprint))]
 		}
-		if im.Arch != "" {
+		if mixed && im.Arch != "" {
 			label = fmt.Sprintf("%-30s %s", label, im.Arch)
 		}
 		imgOpts = append(imgOpts, huh.NewOption(label, im.Fingerprint))
+	}
+	imgTitle := "Image (type to filter)"
+	if !mixed && arch != "" {
+		imgTitle = "Image · " + arch + " (type to filter)"
 	}
 
 	known := map[string]bool{"": true}
@@ -70,13 +85,13 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 		huh.NewGroup(
 			huh.NewInput().Key("name").Title("VM name").
 				Value(&v.name).Validate(validateVMName),
-			huh.NewSelect[string]().Key("image").Title("Image (type to filter)").
+			huh.NewSelect[string]().Key("image").Title(imgTitle).
 				Options(imgOpts...).Value(&v.imageFP).Filtering(true).Height(10),
 		),
 		huh.NewGroup(
-			huh.NewInput().Key("cpu").Title("vCPUs (limits.cpu)").Value(&v.cpu).Validate(validateCPU),
-			huh.NewInput().Key("mem").Title("Memory (limits.memory)").Value(&v.mem).Validate(validateSize),
-			huh.NewInput().Key("disk").Title("Root disk size").Value(&v.disk).Validate(validateSize),
+			huh.NewInput().Key("cpu").Title("vCPUs").Placeholder("2").Value(&v.cpu).Validate(validateCPU),
+			huh.NewInput().Key("mem").Title("Memory (MiB)").Placeholder("2048").Value(&v.mem).Validate(validateSize),
+			huh.NewInput().Key("disk").Title("Disk (GiB)").Placeholder("12").Value(&v.disk).Validate(validateSize),
 		),
 		huh.NewGroup(
 			huh.NewSelect[string]().Key("tmpl").
@@ -90,10 +105,10 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 func newEditForm(vm xincus.VM) (*huh.Form, *formVars) {
 	v := &formVars{cpu: vm.CPULimit, mem: vm.MemLimit}
 	form := huh.NewForm(huh.NewGroup(
-		huh.NewInput().Key("cpu").Title("vCPUs (limits.cpu)").
+		huh.NewInput().Key("cpu").Title("vCPUs").
 			Placeholder("e.g. 2").Value(&v.cpu).Validate(validateCPU),
-		huh.NewInput().Key("mem").Title("Memory (limits.memory)").
-			Placeholder("e.g. 2GiB").Value(&v.mem).Validate(validateSize),
+		huh.NewInput().Key("mem").Title("Memory (MiB or 2GiB)").
+			Placeholder("e.g. 2048").Value(&v.mem).Validate(validateSize),
 	))
 	return applyEscKeymap(form), v
 }
@@ -165,14 +180,28 @@ func validateCPU(s string) error {
 	return nil
 }
 
-var sizeRe = regexp.MustCompile(`^\d+(\.\d+)?\s*(B|kB|KB|KiB|MB|MiB|GB|GiB|TB|TiB)?$`)
+var (
+	sizeRe  = regexp.MustCompile(`^\d+(\.\d+)?\s*(B|kB|KB|KiB|MB|MiB|GB|GiB|TB|TiB)?$`)
+	bareNum = regexp.MustCompile(`^\d+(\.\d+)?$`)
+)
 
 func validateSize(s string) error {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}
 	if !sizeRe.MatchString(strings.TrimSpace(s)) {
-		return fmt.Errorf("use a size like 2GiB or 512MiB")
+		return fmt.Errorf("enter a number (the field's unit) or a size like 2GiB / 512MiB")
 	}
 	return nil
+}
+
+// withUnit appends defUnit to a bare numeric size (e.g. "2048" → "2048MiB") so a plain
+// number is read in the unit the field advertises — Incus treats a unit-less value as
+// bytes. Values that already carry a unit (and the empty string) pass through unchanged.
+func withUnit(s, defUnit string) string {
+	s = strings.TrimSpace(s)
+	if s != "" && bareNum.MatchString(s) {
+		return s + defUnit
+	}
+	return s
 }

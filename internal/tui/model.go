@@ -196,7 +196,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setToast("images: "+msg.err.Error(), true)
 		}
 		m.launchImages, m.launchTemplates = msg.images, msg.templates
-		vars := &formVars{cpu: "2", mem: "2GiB", disk: "12GiB"}
+		vars := &formVars{cpu: "2", mem: "2048", disk: "12"}
 		m.vars, m.formKind = vars, formLaunch
 		m.form = newLaunchForm(msg.images, msg.templates, vars).
 			WithWidth(max(40, m.width-4)).WithHeight(max(12, m.height-5))
@@ -506,7 +506,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 
 	switch kind {
 	case formEdit:
-		cpu, mem := vars.cpu, vars.mem
+		cpu, mem := vars.cpu, withUnit(vars.mem, "MiB")
 		return m.busy("resize", name, func(ctx context.Context) error {
 			return m.client.SetLimits(ctx, name, cpu, mem)
 		})
@@ -525,8 +525,8 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 			Name:             vars.name,
 			ImageFingerprint: vars.imageFP,
 			CPU:              vars.cpu,
-			Memory:           vars.mem,
-			DiskSize:         vars.disk,
+			Memory:           withUnit(vars.mem, "MiB"),
+			DiskSize:         withUnit(vars.disk, "GiB"),
 		}
 		m.editor.SetValue(vars.cloud)
 		m.editor.SetWidth(max(20, m.width-4))
