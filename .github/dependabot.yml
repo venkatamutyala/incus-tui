@@ -4,6 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Supply-chain hygiene: never propose a version until it's been public for 30 days,
+    # so a freshly-published (possibly compromised) release isn't adopted before the
+    # ecosystem has had time to catch it. Mirrors the manual pinning policy.
+    cooldown:
+      default-days: 30
     groups:
       go-modules:
         patterns: ["*"]
@@ -12,6 +17,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 30
     groups:
       actions:
         patterns: ["*"]
@@ -20,3 +27,5 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 30
