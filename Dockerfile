@@ -3,7 +3,7 @@
 # ---- build stage ----
 # Build on the native runner platform and cross-compile to the target arch (the binary
 # is pure Go / CGO-free), so the arm64 image doesn't compile the whole tree under QEMU.
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.4-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
