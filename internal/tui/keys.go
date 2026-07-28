@@ -27,7 +27,6 @@ type keyMap struct {
 	EditLimits key.Binding
 	CopyIP     key.Binding
 	Delete     key.Binding
-	Resize     key.Binding // grow a storage pool (host-scoped)
 }
 
 // ShortHelp is the always-visible help bar. Discoverability keys come first so the
@@ -44,7 +43,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Enter, k.Back, k.Filter, k.Help, k.Quit, k.Refresh},
 		{k.Up, k.Down, k.Top, k.Bottom},
 		{k.Launch, k.Shell, k.Logs, k.Start, k.Stop, k.Restart},
-		{k.Freeze, k.Snapshot, k.EditLimits, k.CopyIP, k.Delete, k.Resize},
+		{k.Freeze, k.Snapshot, k.EditLimits, k.CopyIP, k.Delete},
 	}
 }
 
@@ -72,6 +71,5 @@ func defaultKeys() keyMap {
 		EditLimits: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit cpu/ram")),
 		CopyIP:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy IP")),
 		Delete:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-		Resize:     key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "resize pool")),
 	}
 }
