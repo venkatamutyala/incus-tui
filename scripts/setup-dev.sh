@@ -13,7 +13,7 @@
 set -euo pipefail
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
-GO_VERSION="${GO_VERSION:-1.26.4}"
+GO_VERSION="${GO_VERSION:-1.26.5}"
 
 # --- Go toolchain (pinned) ---
 if ! /usr/local/bin/go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
