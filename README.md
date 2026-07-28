@@ -31,8 +31,9 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
   operations can be cancelled with `esc`.
 - **Snapshots** — create, **restore**, and delete from a snapshot manager (`p`).
 - **Edit CPU/RAM/disk** on an existing VM (`limits.cpu` / `limits.memory` and the root
-  disk `size`). The disk is **grow-only** (a VM block disk can't shrink); reboot to apply —
-  cloud images grow the guest filesystem onto the bigger disk on boot.
+  disk `size`). The disk is **grow-only** (a VM block disk can't shrink) and the **VM must
+  be stopped** to resize it — safe across every storage driver; cloud images grow the guest
+  filesystem onto the bigger disk on the next boot.
 - **Copy a VM's IP** to the clipboard (`y`; OSC52, works over SSH).
 - **Shell in** (`s`) — runs `incus exec <vm>` (bash, falling back to `sh`), gated on
   guest-agent readiness. The bare binary needs the `incus` CLI on `PATH`; the Docker image

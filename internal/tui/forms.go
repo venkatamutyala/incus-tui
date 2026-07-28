@@ -135,7 +135,7 @@ func newEditForm(vm xincus.VM) (*huh.Form, *formVars) {
 		// Disk is grow-only (a VM block disk can't shrink); the grow guard lives in the
 		// service layer (SetResources), so here we only enforce the size format. Blank
 		// leaves it unchanged.
-		huh.NewInput().Key("disk").Title("Disk (GiB, grow only — reboot to apply)").
+		huh.NewInput().Key("disk").Title("Disk (GiB, grow only — VM must be stopped)").
 			Placeholder("e.g. 20GiB").Value(&v.disk).Validate(validateSize),
 	))
 	return applyEscKeymap(form), v

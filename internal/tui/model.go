@@ -193,9 +193,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Point at the next step — the VM is created but still booting / running cloud-init.
 			cmd = m.setToast("launched "+msg.name+" — l: boot logs, s: shell in once it's up", false)
 		case msg.err == nil && msg.action == "resize":
-			// limits.cpu hotplugs, but new memory and a grown disk need a reboot to take
-			// effect — and cloud images grow the guest filesystem onto the bigger disk on boot.
-			cmd = m.setToast("resize "+msg.name+" — reboot to apply new memory/disk (cloud images grow the fs on boot)", false)
+			// limits.cpu hotplugs; new memory needs a reboot, and a grown disk (done while
+			// stopped) applies on the next start — cloud images grow the fs onto it on boot.
+			cmd = m.setToast("resize "+msg.name+" — reboot/start to apply; cloud images grow the fs onto a bigger disk", false)
 		case msg.err == nil:
 			cmd = m.setToast(msg.action+" "+msg.name, false)
 		case errors.Is(msg.err, context.Canceled):
@@ -529,6 +529,14 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 	case formEdit:
 		cpu, mem := vars.cpu, withUnit(vars.mem, "MiB")
 		disk := diskResizeArg(vars.diskSeed, vars.disk) // "" unless the user actually changed it
+		// A disk resize needs the VM stopped (SetResources enforces this too). Catch it
+		// here so the user gets a clear hint instead of watching the op fail in busy mode.
+		if disk != "" {
+			if v, ok := m.vmByName(name); ok && v.StatusCode != api.Stopped {
+				m.mode = modeList
+				return m, toastAfter("stop "+name+" first to resize its disk", true)
+			}
+		}
 		return m.busy("resize", name, func(ctx context.Context) error {
 			return m.client.SetResources(ctx, name, cpu, mem, disk)
 		})

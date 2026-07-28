@@ -197,10 +197,12 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 
 // SetResources edits a VM's cpu, memory, and root-disk size in a single
 // read-modify-write. Any of cpu/mem/disk may be "" to leave that dimension
-// untouched. limits.cpu hotplugs and limits.memory applies on the next boot;
-// the disk is grown by overriding the instance's root device size (grow-only —
-// a VM block disk cannot shrink, and the guest still needs to grow its
-// filesystem, which cloud images do on the next boot).
+// untouched. limits.cpu hotplugs and limits.memory applies on the next boot.
+// A disk resize is grow-only (a VM block disk cannot shrink) and requires the VM
+// to be STOPPED: growing a running VM's block disk is driver-dependent (a dir
+// pool holds the image open and rejects it), so we refuse it uniformly rather
+// than surface a confusing daemon error. Once resized, the guest grows its
+// filesystem onto the bigger disk on the next boot (cloud images do this).
 func (c *Client) SetResources(ctx context.Context, name, cpu, mem, disk string) error {
 	inst, etag, err := c.server.GetInstance(name)
 	if err != nil {
@@ -217,6 +219,11 @@ func (c *Client) SetResources(ctx context.Context, name, cpu, mem, disk string) 
 		put.Config["limits.memory"] = mem
 	}
 	if disk != "" {
+		// Grow-only, and only on a stopped VM (see the method doc). Refuse up front with
+		// a clear message instead of letting the daemon reject an online resize murkily.
+		if inst.StatusCode != api.Stopped {
+			return fmt.Errorf("resizing %q disk: stop the VM first (it is %s)", name, strings.ToLower(inst.Status))
+		}
 		// The effective current size comes from the expanded (profile-merged) root
 		// device; an instance-level override fully replaces it, so copy that resolved
 		// device and change only the size — storage-agnostic, like CreateVM.

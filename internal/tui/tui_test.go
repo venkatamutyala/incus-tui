@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 
+	"github.com/lxc/incus/v7/shared/api"
 	xincus "github.com/venkatamutyala/incus-tui/internal/incus"
 )
 
@@ -230,6 +231,31 @@ func TestDiskResizeArg(t *testing.T) {
 		if got := diskResizeArg(c.seed, c.field); got != c.want {
 			t.Errorf("diskResizeArg(%q, %q) = %q, want %q", c.seed, c.field, got, c.want)
 		}
+	}
+}
+
+// A disk resize on a non-stopped VM must be refused before entering busy mode, while
+// the same edit on a stopped VM proceeds — cpu/ram-only edits are unaffected by state.
+func TestEditDiskRequiresStopped(t *testing.T) {
+	mk := func(status api.StatusCode, diskField string) model {
+		m := *testModel()
+		vm := xincus.VM{Name: "web", StatusCode: status, DiskSize: "10GiB"}
+		m.vms, m.selectedName = []xincus.VM{vm}, "web"
+		m.formKind = formEdit
+		m.vars = &formVars{cpu: "2", disk: diskField, diskSeed: "10GiB"}
+		return m
+	}
+	// Running + real disk change → refused, back to list (never enters busy).
+	if got, _ := mk(api.Running, "20GiB").completeForm(); got.(model).mode != modeList {
+		t.Errorf("running VM disk resize: mode = %v, want modeList (refused)", got.(model).mode)
+	}
+	// Stopped + real disk change → proceeds into busy mode.
+	if got, _ := mk(api.Stopped, "20GiB").completeForm(); got.(model).mode != modeBusy {
+		t.Errorf("stopped VM disk resize: mode = %v, want modeBusy (proceeds)", got.(model).mode)
+	}
+	// Running but disk left unchanged (cpu-only edit) → proceeds; the disk gate doesn't fire.
+	if got, _ := mk(api.Running, "10GiB").completeForm(); got.(model).mode != modeBusy {
+		t.Errorf("running VM cpu-only edit: mode = %v, want modeBusy (proceeds)", got.(model).mode)
 	}
 }
 
