@@ -527,7 +527,8 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 
 	switch kind {
 	case formEdit:
-		cpu, mem, disk := vars.cpu, withUnit(vars.mem, "MiB"), withUnit(vars.disk, "GiB")
+		cpu, mem := vars.cpu, withUnit(vars.mem, "MiB")
+		disk := diskResizeArg(vars.diskSeed, vars.disk) // "" unless the user actually changed it
 		return m.busy("resize", name, func(ctx context.Context) error {
 			return m.client.SetResources(ctx, name, cpu, mem, disk)
 		})

@@ -195,8 +195,6 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// SetLimits updates limits.cpu and/or limits.memory on an existing VM, preserving
-// the rest of the config via a read-modify-write with the current ETag.
 // SetResources edits a VM's cpu, memory, and root-disk size in a single
 // read-modify-write. Any of cpu/mem/disk may be "" to leave that dimension
 // untouched. limits.cpu hotplugs and limits.memory applies on the next boot;

@@ -47,6 +47,8 @@ type formVars struct {
 	cloud   string
 	action  string // snapshot manager: "create" | "restore:<snap>" | "delete:<snap>"
 	confirm bool
+
+	diskSeed string // edit form: the disk field's seeded current size, to detect a real change
 }
 
 // applyEscKeymap makes esc abort a form (back to the list). esc is consumed by a field
@@ -124,6 +126,7 @@ func newEditForm(vm xincus.VM) (*huh.Form, *formVars) {
 	// Seed disk from the effective root size (normalizeMem is a generic byte→IEC
 	// renderer) so an untouched, unit-bearing value isn't rescaled by withUnit later.
 	v := &formVars{cpu: vm.CPULimit, mem: normalizeMem(vm.MemLimit), disk: normalizeMem(vm.DiskSize)}
+	v.diskSeed = v.disk // remember the seeded size so an untouched submit doesn't pin it as an override
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewInput().Key("cpu").Title("vCPUs").
 			Placeholder("e.g. 2").Value(&v.cpu).Validate(validateCPU),
@@ -256,6 +259,19 @@ func validateSize(s string) error {
 		return fmt.Errorf("use a whole number, or a size like 2GiB / 512MiB (no spaces or decimals)")
 	}
 	return nil
+}
+
+// diskResizeArg returns the size to pass to SetResources for the edit form's disk
+// field: "" (leave the root device untouched) when the field is blank or still equals
+// the seeded current size, otherwise the unit-normalized new size. Because the field is
+// seeded with the current size, this keeps an edit that only changed cpu/ram from
+// rewriting — and thereby pinning as an instance override — a profile-inherited disk.
+func diskResizeArg(seed, field string) string {
+	field = strings.TrimSpace(field)
+	if field == "" || field == strings.TrimSpace(seed) {
+		return ""
+	}
+	return withUnit(field, "GiB")
 }
 
 // withUnit appends defUnit to a bare whole-number size (e.g. "2048" → "2048MiB") so a

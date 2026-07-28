@@ -207,13 +207,29 @@ func TestEditFormDiskSeedAndMapping(t *testing.T) {
 	if got := withUnit(v.disk, "GiB"); got != "10GiB" {
 		t.Errorf("withUnit(seeded disk) = %q, want 10GiB", got)
 	}
-	// A bare number the user types gets the field's GiB unit.
-	if got := withUnit("20", "GiB"); got != "20GiB" {
-		t.Errorf("withUnit(\"20\") = %q, want 20GiB", got)
+	// The seed is captured so an untouched submit can be detected.
+	if v.diskSeed != "10GiB" {
+		t.Errorf("diskSeed = %q, want 10GiB", v.diskSeed)
 	}
-	// A blank disk field means "leave unchanged" — maps to "" so SetResources skips it.
-	if got := withUnit("", "GiB"); got != "" {
-		t.Errorf("withUnit(\"\") = %q, want empty", got)
+}
+
+// Pins the untouched-submit guard: editing only cpu/ram (disk field left at its seeded
+// value, or blanked) must NOT resize the disk — otherwise a profile-inherited size gets
+// pinned onto the instance as an override. Only a genuine change resizes.
+func TestDiskResizeArg(t *testing.T) {
+	cases := []struct{ seed, field, want string }{
+		{"10GiB", "10GiB", ""},      // untouched → no resize
+		{"10GiB", " 10GiB ", ""},    // untouched (whitespace) → no resize
+		{"10GiB", "", ""},           // cleared → no resize
+		{"10GiB", "20", "20GiB"},    // bare number changed → GiB
+		{"10GiB", "20GiB", "20GiB"}, // unit-bearing change → passthrough
+		{"", "10", "10GiB"},         // no prior explicit size, user sets one
+		{"", "", ""},                // nothing seeded, nothing entered
+	}
+	for _, c := range cases {
+		if got := diskResizeArg(c.seed, c.field); got != c.want {
+			t.Errorf("diskResizeArg(%q, %q) = %q, want %q", c.seed, c.field, got, c.want)
+		}
 	}
 }
 
