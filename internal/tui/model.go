@@ -193,8 +193,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Point at the next step — the VM is created but still booting / running cloud-init.
 			cmd = m.setToast("launched "+msg.name+" — l: boot logs, s: shell in once it's up", false)
 		case msg.err == nil && msg.action == "resize":
-			// limits.cpu hotplugs, but a running VM needs a reboot to pick up new memory.
-			cmd = m.setToast("resize "+msg.name+" — restart the VM to apply new memory", false)
+			// limits.cpu hotplugs, but new memory and a grown disk need a reboot to take
+			// effect — and cloud images grow the guest filesystem onto the bigger disk on boot.
+			cmd = m.setToast("resize "+msg.name+" — reboot to apply new memory/disk (cloud images grow the fs on boot)", false)
 		case msg.err == nil:
 			cmd = m.setToast(msg.action+" "+msg.name, false)
 		case errors.Is(msg.err, context.Canceled):
@@ -526,9 +527,9 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 
 	switch kind {
 	case formEdit:
-		cpu, mem := vars.cpu, withUnit(vars.mem, "MiB")
+		cpu, mem, disk := vars.cpu, withUnit(vars.mem, "MiB"), withUnit(vars.disk, "GiB")
 		return m.busy("resize", name, func(ctx context.Context) error {
-			return m.client.SetLimits(ctx, name, cpu, mem)
+			return m.client.SetResources(ctx, name, cpu, mem, disk)
 		})
 	case formDelete:
 		if !vars.confirm {

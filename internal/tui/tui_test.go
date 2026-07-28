@@ -193,6 +193,30 @@ func TestLaunchSpecMapping(t *testing.T) {
 	}
 }
 
+// Pins the edit form's seed → submit contract for the disk field: the current disk
+// size seeds the field unit-bearing (so an untouched value isn't rescaled), and a
+// bare number typed in gets the GiB unit on the way to SetResources. A regression here
+// would silently mis-size a resized disk.
+func TestEditFormDiskSeedAndMapping(t *testing.T) {
+	vm := xincus.VM{CPULimit: "2", MemLimit: "2147483648", DiskSize: "10GiB"}
+	_, v := newEditForm(vm)
+	if v.cpu != "2" || v.mem != "2GiB" || v.disk != "10GiB" {
+		t.Fatalf("edit form seed = cpu %q / mem %q / disk %q, want 2 / 2GiB / 10GiB", v.cpu, v.mem, v.disk)
+	}
+	// Untouched current size is unit-bearing → withUnit leaves it (no rescale).
+	if got := withUnit(v.disk, "GiB"); got != "10GiB" {
+		t.Errorf("withUnit(seeded disk) = %q, want 10GiB", got)
+	}
+	// A bare number the user types gets the field's GiB unit.
+	if got := withUnit("20", "GiB"); got != "20GiB" {
+		t.Errorf("withUnit(\"20\") = %q, want 20GiB", got)
+	}
+	// A blank disk field means "leave unchanged" — maps to "" so SetResources skips it.
+	if got := withUnit("", "GiB"); got != "" {
+		t.Errorf("withUnit(\"\") = %q, want empty", got)
+	}
+}
+
 func testModel() *model {
 	m := &model{width: 100}
 	m.table = table.New()

@@ -89,13 +89,22 @@ func TestLiveLifecycle(t *testing.T) {
 		t.Fatalf("RestoreSnapshot: %v", err)
 	}
 
-	// Edit limits on the existing (running) VM.
-	if err := c.SetLimits(ctx, name, "2", ""); err != nil {
-		t.Fatalf("SetLimits: %v", err)
+	// Edit cpu and grow the root disk on the existing (running) VM. The VM was
+	// created at 10GiB (see above); growing to 12GiB exercises the grow path.
+	if err := c.SetResources(ctx, name, "2", "", "12GiB"); err != nil {
+		t.Fatalf("SetResources: %v", err)
 	}
 	vm, _ = c.GetVM(name)
 	if vm.CPULimit != "2" {
-		t.Errorf("after SetLimits cpu = %q, want 2", vm.CPULimit)
+		t.Errorf("after SetResources cpu = %q, want 2", vm.CPULimit)
+	}
+	if vm.DiskSize != "12GiB" {
+		t.Errorf("after SetResources disk = %q, want 12GiB", vm.DiskSize)
+	}
+
+	// A shrink must be rejected up front by growOnly, never reaching the daemon.
+	if err := c.SetResources(ctx, name, "", "", "8GiB"); err == nil {
+		t.Error("SetResources disk shrink: expected an error, got nil")
 	}
 
 	if err := c.DeleteSnapshot(ctx, name, "snap0"); err != nil {

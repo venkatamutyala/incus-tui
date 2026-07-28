@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lxc/incus/v7/shared/api"
+	"github.com/lxc/incus/v7/shared/units"
 )
 
 // VM is a flattened, UI-friendly view of an Incus virtual machine. It deliberately
@@ -23,6 +24,7 @@ type VM struct {
 	CreatedAt  time.Time
 	CPULimit   string // limits.cpu (cores), or "" if unset
 	MemLimit   string // limits.memory, or "" if unset
+	DiskSize   string // root disk device size (e.g. "12GiB"), or "" if unset/pool-default
 
 	// Live metrics (only meaningful once the guest agent is up).
 	CPUUsageNS  int64
@@ -76,6 +78,7 @@ func toVM(f *api.InstanceFull) VM {
 		CreatedAt:  f.CreatedAt,
 		CPULimit:   f.Config["limits.cpu"],
 		MemLimit:   f.Config["limits.memory"],
+		DiskSize:   f.ExpandedDevices["root"]["size"], // effective size (instance override or profile default)
 		Image:      imageDescription(f.Config),
 	}
 	if f.State != nil {
@@ -194,7 +197,13 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 
 // SetLimits updates limits.cpu and/or limits.memory on an existing VM, preserving
 // the rest of the config via a read-modify-write with the current ETag.
-func (c *Client) SetLimits(ctx context.Context, name, cpu, mem string) error {
+// SetResources edits a VM's cpu, memory, and root-disk size in a single
+// read-modify-write. Any of cpu/mem/disk may be "" to leave that dimension
+// untouched. limits.cpu hotplugs and limits.memory applies on the next boot;
+// the disk is grown by overriding the instance's root device size (grow-only —
+// a VM block disk cannot shrink, and the guest still needs to grow its
+// filesystem, which cloud images do on the next boot).
+func (c *Client) SetResources(ctx context.Context, name, cpu, mem, disk string) error {
 	inst, etag, err := c.server.GetInstance(name)
 	if err != nil {
 		return fmt.Errorf("reading %q config: %w", name, err)
@@ -209,12 +218,53 @@ func (c *Client) SetLimits(ctx context.Context, name, cpu, mem string) error {
 	if mem != "" {
 		put.Config["limits.memory"] = mem
 	}
+	if disk != "" {
+		// The effective current size comes from the expanded (profile-merged) root
+		// device; an instance-level override fully replaces it, so copy that resolved
+		// device and change only the size — storage-agnostic, like CreateVM.
+		root, ok := inst.ExpandedDevices["root"]
+		if !ok {
+			return fmt.Errorf("resizing %q disk: no root disk device to size", name)
+		}
+		if cur := root["size"]; cur != "" {
+			if err := growOnly(cur, disk); err != nil {
+				return fmt.Errorf("resizing %q disk: %w", name, err)
+			}
+		}
+		dev := make(map[string]string, len(root))
+		for k, v := range root {
+			dev[k] = v
+		}
+		dev["size"] = disk
+		if put.Devices == nil {
+			put.Devices = map[string]map[string]string{}
+		}
+		put.Devices["root"] = dev
+	}
 	op, err := c.server.UpdateInstance(name, put, etag)
 	if err != nil {
-		return fmt.Errorf("updating %q limits: %w", name, err)
+		return fmt.Errorf("updating %q resources: %w", name, err)
 	}
 	if err := waitOp(ctx, op); err != nil {
-		return fmt.Errorf("updating %q limits: %w", name, err)
+		return fmt.Errorf("updating %q resources: %w", name, err)
+	}
+	return nil
+}
+
+// growOnly returns an error unless requested is a valid size >= current. Both are
+// parsed the way Incus parses disk sizes (IEC units like "20GiB"). A VM's block
+// disk can only grow — shrinking risks data loss and Incus rejects it (less clearly).
+func growOnly(current, requested string) error {
+	cur, err := units.ParseByteSizeString(current)
+	if err != nil {
+		return fmt.Errorf("parsing current size %q: %w", current, err)
+	}
+	req, err := units.ParseByteSizeString(requested)
+	if err != nil {
+		return fmt.Errorf("parsing new size %q: %w", requested, err)
+	}
+	if req < cur {
+		return fmt.Errorf("disks can only grow: current %s > requested %s", current, requested)
 	}
 	return nil
 }

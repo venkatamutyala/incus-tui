@@ -121,12 +121,19 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 }
 
 func newEditForm(vm xincus.VM) (*huh.Form, *formVars) {
-	v := &formVars{cpu: vm.CPULimit, mem: normalizeMem(vm.MemLimit)}
+	// Seed disk from the effective root size (normalizeMem is a generic byte→IEC
+	// renderer) so an untouched, unit-bearing value isn't rescaled by withUnit later.
+	v := &formVars{cpu: vm.CPULimit, mem: normalizeMem(vm.MemLimit), disk: normalizeMem(vm.DiskSize)}
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewInput().Key("cpu").Title("vCPUs").
 			Placeholder("e.g. 2").Value(&v.cpu).Validate(validateCPU),
 		huh.NewInput().Key("mem").Title("Memory (MiB or 2GiB)").
 			Placeholder("e.g. 2048").Value(&v.mem).Validate(validateSize),
+		// Disk is grow-only (a VM block disk can't shrink); the grow guard lives in the
+		// service layer (SetResources), so here we only enforce the size format. Blank
+		// leaves it unchanged.
+		huh.NewInput().Key("disk").Title("Disk (GiB, grow only — reboot to apply)").
+			Placeholder("e.g. 20GiB").Value(&v.disk).Validate(validateSize),
 	))
 	return applyEscKeymap(form), v
 }

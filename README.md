@@ -30,7 +30,9 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
   **guarded delete** that names the target VM and warns when it will be force-stopped. Long
   operations can be cancelled with `esc`.
 - **Snapshots** — create, **restore**, and delete from a snapshot manager (`p`).
-- **Edit CPU/RAM** on an existing VM (`limits.cpu` / `limits.memory`).
+- **Edit CPU/RAM/disk** on an existing VM (`limits.cpu` / `limits.memory` and the root
+  disk `size`). The disk is **grow-only** (a VM block disk can't shrink); reboot to apply —
+  cloud images grow the guest filesystem onto the bigger disk on boot.
 - **Copy a VM's IP** to the clipboard (`y`; OSC52, works over SSH).
 - **Shell in** (`s`) — runs `incus exec <vm>` (bash, falling back to `sh`), gated on
   guest-agent readiness. The bare binary needs the `incus` CLI on `PATH`; the Docker image
@@ -55,7 +57,7 @@ launch disk pool from your default profile.
 | `esc` / `q` | back / quit | `S` `t` `r` | start / stop / restart |
 | `/` | fuzzy filter | `f` | pause / resume |
 | `?` | full help | `p` | snapshots (create/restore/delete) |
-| `R` | refresh | `e` `y` `d` | edit cpu·ram / copy IP / delete |
+| `R` | refresh | `e` `y` `d` | edit cpu·ram·disk / copy IP / delete |
 
 In the launch wizard, `ctrl+s` launches from the cloud-init editor and `esc` steps back.
 During a long operation, `esc` cancels it.
