@@ -108,8 +108,10 @@ func TestLiveLifecycle(t *testing.T) {
 	}
 
 	// Stop, then grow the root disk 10GiB→12GiB (the VM was created at 10GiB above).
-	if err := c.Stop(ctx, name); err != nil {
-		t.Fatalf("Stop: %v", err)
+	// Force-stop (immediate power-off): a graceful Stop waits on ACPI shutdown, which
+	// the minimal test guest may ignore, hanging until the daemon's ~10-min timeout.
+	if err := c.ForceStop(ctx, name); err != nil {
+		t.Fatalf("ForceStop: %v", err)
 	}
 	if err := c.SetResources(ctx, name, "", "", "12GiB"); err != nil {
 		t.Fatalf("SetResources disk grow (stopped): %v", err)
