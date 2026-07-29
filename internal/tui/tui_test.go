@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 
+	"github.com/lxc/incus/v7/shared/api"
 	xincus "github.com/venkatamutyala/incus-tui/internal/incus"
 )
 
@@ -141,8 +142,9 @@ func TestMemCell(t *testing.T) {
 }
 
 func TestValidateSize(t *testing.T) {
-	ok := []string{"", "2048", "12", "2GiB", "512MiB", "100GB"}
-	bad := []string{"1.5", "1.5GiB", "2 GiB", "2gib", "abc", "12GiBx"}
+	ok := []string{"", "2048", "12", "2GiB", "512MiB", "4TiB"}
+	// SI units are rejected: fields advertise IEC (MiB/GiB), and "10GB" ≠ "10GiB".
+	bad := []string{"1.5", "1.5GiB", "2 GiB", "2gib", "abc", "12GiBx", "100GB", "10MB", "1kB"}
 	for _, s := range ok {
 		if err := validateSize(s); err != nil {
 			t.Errorf("validateSize(%q) rejected, want accepted: %v", s, err)
@@ -155,7 +157,7 @@ func TestValidateSize(t *testing.T) {
 	}
 }
 
-func TestNormalizeMem(t *testing.T) {
+func TestNormalizeByteSize(t *testing.T) {
 	cases := map[string]string{
 		"2147483648": "2GiB",        // 2 GiB in bytes → readable, and unit-bearing so withUnit won't rescale
 		"536870912":  "512MiB",      // 512 MiB in bytes
@@ -164,12 +166,12 @@ func TestNormalizeMem(t *testing.T) {
 		"":           "",            // empty stays empty
 	}
 	for in, want := range cases {
-		if got := normalizeMem(in); got != want {
-			t.Errorf("normalizeMem(%q) = %q, want %q", in, got, want)
+		if got := normalizeByteSize(in); got != want {
+			t.Errorf("normalizeByteSize(%q) = %q, want %q", in, got, want)
 		}
 		// And the key property: re-applying withUnit to the normalized value is a no-op.
-		if n := normalizeMem(in); n != "" && withUnit(n, "MiB") != n {
-			t.Errorf("withUnit(normalizeMem(%q)) rescaled %q → %q", in, n, withUnit(n, "MiB"))
+		if n := normalizeByteSize(in); n != "" && withUnit(n, "MiB") != n {
+			t.Errorf("withUnit(normalizeByteSize(%q)) rescaled %q → %q", in, n, withUnit(n, "MiB"))
 		}
 	}
 }
@@ -190,6 +192,107 @@ func TestLaunchSpecMapping(t *testing.T) {
 	}
 	if spec.DiskSize != "12GiB" {
 		t.Errorf("DiskSize = %q, want 12GiB", spec.DiskSize)
+	}
+}
+
+// Pins the edit form's seed → submit contract for the disk field: the current disk
+// size seeds the field unit-bearing (so an untouched value isn't rescaled), and a
+// bare number typed in gets the GiB unit on the way to SetResources. A regression here
+// would silently mis-size a resized disk.
+func TestEditFormDiskSeedAndMapping(t *testing.T) {
+	vm := xincus.VM{StatusCode: api.Stopped, CPULimit: "2", MemLimit: "2147483648", DiskSize: "10GiB"}
+	_, v := newEditForm(vm)
+	if v.cpu != "2" || v.mem != "2GiB" || v.disk != "10GiB" {
+		t.Fatalf("edit form seed = cpu %q / mem %q / disk %q, want 2 / 2GiB / 10GiB", v.cpu, v.mem, v.disk)
+	}
+	// Untouched current size is unit-bearing → withUnit leaves it (no rescale).
+	if got := withUnit(v.disk, "GiB"); got != "10GiB" {
+		t.Errorf("withUnit(seeded disk) = %q, want 10GiB", got)
+	}
+	// The seed is captured so an untouched submit can be detected.
+	if v.diskSeed != "10GiB" {
+		t.Errorf("diskSeed = %q, want 10GiB", v.diskSeed)
+	}
+}
+
+// Pins the untouched-submit guard: editing only cpu/ram (disk field left at its seeded
+// value, or blanked) must NOT resize the disk — otherwise a profile-inherited size gets
+// pinned onto the instance as an override. Only a genuine change resizes.
+func TestDiskResizeArg(t *testing.T) {
+	cases := []struct{ seed, field, want string }{
+		{"10GiB", "10GiB", ""},      // untouched → no resize
+		{"10GiB", " 10GiB ", ""},    // untouched (whitespace) → no resize
+		{"10GiB", "", ""},           // cleared → no resize
+		{"10GiB", "20", "20GiB"},    // bare number changed → GiB
+		{"10GiB", "20GiB", "20GiB"}, // unit-bearing change → passthrough
+		{"", "10", "10GiB"},         // no prior explicit size, user sets one
+		{"", "", ""},                // nothing seeded, nothing entered
+	}
+	for _, c := range cases {
+		if got := diskResizeArg(c.seed, c.field); got != c.want {
+			t.Errorf("diskResizeArg(%q, %q) = %q, want %q", c.seed, c.field, got, c.want)
+		}
+	}
+}
+
+// The edit form offers an editable disk field only when the VM is stopped. A running VM
+// gets no disk field (and no seed), so a cpu/ram edit can never silently drop into — or be
+// refused because of — a disk resize.
+func TestEditFormDiskFieldGatedByState(t *testing.T) {
+	// Stopped: the disk field is present and seeded from the current size.
+	_, vs := newEditForm(xincus.VM{Name: "web", StatusCode: api.Stopped, CPULimit: "2", MemLimit: "2147483648", DiskSize: "10GiB"})
+	if vs.disk != "10GiB" || vs.diskSeed != "10GiB" {
+		t.Errorf("stopped VM: disk=%q diskSeed=%q, want 10GiB/10GiB (editable seeded field)", vs.disk, vs.diskSeed)
+	}
+	// Running: no editable disk field, so no seed — the disk dimension stays untouched.
+	_, vr := newEditForm(xincus.VM{Name: "web", StatusCode: api.Running, CPULimit: "2", MemLimit: "2147483648", DiskSize: "10GiB"})
+	if vr.disk != "" || vr.diskSeed != "" {
+		t.Errorf("running VM: disk=%q diskSeed=%q, want empty (no disk field offered)", vr.disk, vr.diskSeed)
+	}
+}
+
+// A disk grow is gated on the confirm step: a changed disk with a declined confirm cancels
+// the whole edit; a confirmed change proceeds; a cpu/ram-only edit (unchanged disk) never
+// needs the confirm and proceeds regardless.
+func TestEditConfirmGatesDiskGrow(t *testing.T) {
+	mk := func(seed, disk string, confirm bool) model {
+		m := *testModel()
+		m.selectedName = "web"
+		m.formKind = formEdit
+		m.vars = &formVars{cpu: "2", diskSeed: seed, disk: disk, confirm: confirm}
+		return m
+	}
+	// Grew the disk but declined the confirm → whole edit cancelled (back to list, not busy).
+	if got, _ := mk("10GiB", "20GiB", false).completeForm(); got.(model).mode != modeList {
+		t.Errorf("declined disk grow: mode = %v, want modeList (cancelled)", got.(model).mode)
+	}
+	// Grew the disk and confirmed → proceeds into busy.
+	if got, _ := mk("10GiB", "20GiB", true).completeForm(); got.(model).mode != modeBusy {
+		t.Errorf("confirmed disk grow: mode = %v, want modeBusy", got.(model).mode)
+	}
+	// Disk unchanged (cpu/ram-only edit) → proceeds regardless of the confirm flag.
+	if got, _ := mk("10GiB", "10GiB", false).completeForm(); got.(model).mode != modeBusy {
+		t.Errorf("cpu/ram-only edit: mode = %v, want modeBusy (no confirm needed)", got.(model).mode)
+	}
+}
+
+// The inline grow-only validator rejects a shrink below the seeded size in-field, accepts a
+// grow or an unchanged value, and defers to format validation.
+func TestGrowOnlyValidator(t *testing.T) {
+	v := growOnlyValidator("10GiB")
+	if err := v("8GiB"); err == nil {
+		t.Error("shrink 8GiB below 10GiB should be rejected in-field")
+	}
+	if err := v("8000MiB"); err == nil { // 8000MiB < 10GiB, cross-unit
+		t.Error("cross-unit shrink 8000MiB below 10GiB should be rejected")
+	}
+	for _, ok := range []string{"", "10GiB", "20", "20GiB", "10240MiB"} { // blank/equal/grow
+		if err := v(ok); err != nil {
+			t.Errorf("growOnlyValidator(10GiB)(%q) = %v, want nil", ok, err)
+		}
+	}
+	if err := v("1.5"); err == nil { // still format-validated
+		t.Error("decimal should be rejected by the format check")
 	}
 }
 

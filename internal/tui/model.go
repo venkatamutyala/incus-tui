@@ -193,8 +193,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Point at the next step — the VM is created but still booting / running cloud-init.
 			cmd = m.setToast("launched "+msg.name+" — l: boot logs, s: shell in once it's up", false)
 		case msg.err == nil && msg.action == "resize":
-			// limits.cpu hotplugs, but a running VM needs a reboot to pick up new memory.
-			cmd = m.setToast("resize "+msg.name+" — restart the VM to apply new memory", false)
+			// limits.cpu hotplugs; new memory and a grown disk apply on the next start —
+			// cloud images auto-grow the filesystem onto a bigger disk.
+			cmd = m.setToast("resize "+msg.name+" — start it to apply; cloud images auto-grow the filesystem", false)
 		case msg.err == nil:
 			cmd = m.setToast(msg.action+" "+msg.name, false)
 		case errors.Is(msg.err, context.Canceled):
@@ -526,9 +527,20 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 
 	switch kind {
 	case formEdit:
-		cpu, mem := vars.cpu, withUnit(vars.mem, "MiB")
+		// The disk field is only present when the VM is stopped (newEditForm gates it), so
+		// a running-VM edit carries no disk change and its cpu/ram still apply. diskResizeArg
+		// is "" unless the user actually changed it.
+		disk := diskResizeArg(vars.diskSeed, vars.disk)
+		// When the disk is being grown, the form showed a confirm; a declined confirm cancels
+		// the whole edit (the disk is the consequential change). A cpu/ram-only edit (disk=="")
+		// never sees the confirm, so don't gate it.
+		if disk != "" && !vars.confirm {
+			m.mode = modeList
+			return m, m.setToast("edit cancelled", false)
+		}
+		edit := xincus.ResourceEdit{CPU: vars.cpu, Mem: withUnit(vars.mem, "MiB"), Disk: disk}
 		return m.busy("resize", name, func(ctx context.Context) error {
-			return m.client.SetLimits(ctx, name, cpu, mem)
+			return m.client.SetResources(ctx, name, edit)
 		})
 	case formDelete:
 		if !vars.confirm {

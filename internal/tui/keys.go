@@ -68,7 +68,7 @@ func defaultKeys() keyMap {
 		Restart:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart")),
 		Freeze:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "pause/resume")),
 		Snapshot:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "snapshot")),
-		EditLimits: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit cpu/ram")),
+		EditLimits: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit cpu/ram/disk")),
 		CopyIP:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy IP")),
 		Delete:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 	}
