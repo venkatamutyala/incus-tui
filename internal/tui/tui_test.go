@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/lxc/incus/v7/shared/api"
 	xincus "github.com/venkatamutyala/incus-tui/internal/incus"
@@ -293,6 +296,96 @@ func TestGrowOnlyValidator(t *testing.T) {
 	}
 	if err := v("1.5"); err == nil { // still format-validated
 		t.Error("decimal should be rejected by the format check")
+	}
+}
+
+// sizedModel builds a real model at a given terminal size (via WindowSizeMsg → layout),
+// marked ready with one VM, for frame-rendering assertions.
+func sizedModel(w, h int, vm xincus.VM) model {
+	mm, _ := New(nil).Update(tea.WindowSizeMsg{Width: w, Height: h})
+	m := mm.(model)
+	m.ready = true
+	m.vms = []xincus.VM{vm}
+	m.applyFilter()
+	m.selectedName = vm.Name
+	return m
+}
+
+// assertFrame pins the core rendering invariant: the frame is EXACTLY m.height rows and no
+// line exceeds m.width. A frame shorter than m.height leaves stale rows on screen (the
+// "garbled text" bug, worst in tmux); a wider line is clipped by the AltScreen renderer.
+func assertFrame(t *testing.T, m model, label string) {
+	t.Helper()
+	f := m.frameView()
+	if got := lipgloss.Height(f); got != m.height {
+		t.Errorf("%s @ %dx%d: frame height = %d, want %d", label, m.width, m.height, got, m.height)
+	}
+	for i, line := range strings.Split(f, "\n") {
+		if lw := lipgloss.Width(line); lw > m.width {
+			t.Errorf("%s @ %dx%d: line %d width = %d > %d", label, m.width, m.height, i, lw, m.width)
+		}
+	}
+}
+
+// The composed frame must always be exactly m.height × m.width across every mode and size —
+// including a form whose content is far taller than the screen (simulating a big inline
+// validation error), which must be clamped, not allowed to strand rows.
+func TestFrameAlwaysExactlyFillsScreen(t *testing.T) {
+	vm := xincus.VM{Name: "web-01", StatusCode: api.Stopped, Status: "Stopped", CPULimit: "2", MemLimit: "2147483648", DiskSize: "10GiB", IPv4: "10.0.0.5"}
+	for _, s := range [][2]int{{80, 24}, {100, 40}, {120, 30}, {60, 20}, {40, 14}} {
+		w, h := s[0], s[1]
+		base := func() model { return sizedModel(w, h, vm) }
+
+		list := base()
+		assertFrame(t, list, "list")
+
+		full := base()
+		full.help.ShowAll = true
+		full.layout()
+		assertFrame(t, full, "list+fullhelp")
+
+		busy := base()
+		busy.mode = modeBusy
+		busy.busyText = "resize web-01"
+		assertFrame(t, busy, "busy")
+
+		detail := base()
+		detail.mode = modeDetail
+		detail.layout()
+		detail.refreshDetail()
+		assertFrame(t, detail, "detail")
+
+		logs := base()
+		logs.mode = modeLogs
+		logs.layout()
+		logs.logs.SetContent("line one\nline two\nline three")
+		assertFrame(t, logs, "logs")
+
+		editor := base()
+		editor.mode = modeLaunchEdit
+		editor.editor.SetValue("#cloud-config\nruncmd:\n  - echo hi")
+		assertFrame(t, editor, "launchEdit")
+
+		edit := base()
+		edit.mode = modeForm
+		ef, _ := newEditForm(vm)
+		edit.form = ef.WithWidth(formWidth(w)).WithHeight(formHeight(h))
+		_ = edit.form.Init()
+		assertFrame(t, edit, "editForm")
+
+		launch := base()
+		launch.mode = modeForm
+		launch.form = newLaunchForm(nil, nil, &formVars{}, nil).WithWidth(formWidth(w)).WithHeight(formHeight(h))
+		_ = launch.form.Init()
+		assertFrame(t, launch, "launchForm")
+
+		// The garbled-text regression: a form far taller than the screen must still be pinned.
+		overtall := base()
+		overtall.mode = modeForm
+		of, _ := newEditForm(vm)
+		overtall.form = of.WithWidth(formWidth(w)).WithHeight(h * 4)
+		_ = overtall.form.Init()
+		assertFrame(t, overtall, "overtallForm")
 	}
 }
 

@@ -21,8 +21,9 @@ UI never touches the raw Incus API and the service layer stays independently int
 - `client.go` — `Connect()` (unix socket), `waitOp(ctx, op)` (ctx-cancelable op wait that also
   cancels the server-side op), `Disconnect()`. The lazy image-server cache is guarded by a mutex.
 - `instances.go` — `ListVMs`/`GetVM` (+ `toVM` flattening), lifecycle (`Start`/`Stop`/`ForceStop`/
-  `Restart`/`Freeze`/`Unfreeze`), `Delete` (force-stops a non-stopped VM first), `SetLimits` (etag
-  read-modify-write), snapshots (`Snapshot`/`RestoreSnapshot`/`DeleteSnapshot`), `CreateVM`
+  `Restart`/`Freeze`/`Unfreeze`), `Delete` (force-stops a non-stopped VM first), `SetResources` (etag
+  read-modify-write of cpu/mem/disk; disk grow-only + stopped-VM only), snapshots
+  (`Snapshot`/`RestoreSnapshot`/`DeleteSnapshot`), `CreateVM`
   (resolves the root disk pool from the default profile — storage-agnostic), `hostArch`/`normalizeArch`.
 - `images.go` — `ListVMImages`: host-arch filter + dedup of daily-build serials to one entry per
   product (os/release/variant/arch), keeping the newest; cloud variants sorted first.
@@ -39,8 +40,8 @@ UI never touches the raw Incus API and the service layer stays independently int
   `layout()` sizes every component to the terminal; `helpRows()` reserves the help-bar height.
 - `view.go` — `View()` (a `JoinVertical` of header / body / status / help), the responsive table
   columns (`allCols`/`visibleCols`), and detail rendering.
-- `forms.go` — huh forms (launch wizard, edit cpu/ram, snapshot manager, delete confirm), the
-  validators, and the size helpers `withUnit` / `normalizeMem`.
+- `forms.go` — huh forms (launch wizard, edit cpu/ram/disk, snapshot manager, delete confirm), the
+  validators, and the size helpers `withUnit` / `normalizeByteSize`.
 - `keys.go` — the keymap. `styles.go` — lipgloss styles + cell formatters. `messages.go` — the
   `tea.Cmd` constructors and message types.
 
