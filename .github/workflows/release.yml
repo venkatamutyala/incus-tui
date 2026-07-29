@@ -2,58 +2,86 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  # Manual approval gate: cutting a release requires a click in the protected
-  # "release" environment, so a leaked token / rogue tag push can't ship on its own.
+  # Release Please maintains a "release PR" from the Conventional Commit history: it keeps
+  # CHANGELOG.md and the version bumped, and — when that PR is merged — creates the git tag and a
+  # DRAFT GitHub release. The draft (mutable) is what lets GoReleaser attach signed assets before we
+  # publish; publishing is what makes a release immutable, so assets MUST be attached while it is
+  # still a draft. release_created is true only on the push that merges the release PR.
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag + draft release
+      pull-requests: write # maintain the release PR
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Manual approval gate: building/publishing a release still requires a human click in the protected
+  # "release" environment, so a merged release PR can't ship on its own. Only runs when a release was
+  # just cut. The draft + tag already exist at this point, but nothing is public until goreleaser
+  # publishes below.
   approve:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     environment: release
     steps:
-      - run: echo "Release ${{ github.ref_name }} approved."
+      - run: echo "Release ${{ needs.release-please.outputs.tag_name }} approved."
 
   goreleaser:
-    needs: approve
+    needs: [release-please, approve]
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the GitHub Release
+      contents: write # upload assets + publish the draft
       id-token: write # keyless cosign / attestations (ambient GitHub OIDC token)
       attestations: write # SLSA build-provenance attestations
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          ref: ${{ needs.release-please.outputs.tag_name }} # build the exact tagged commit
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: go.mod
       # cosign-installer v4.1.2 ships cosign v3.x, whose sign-blob writes a single
       # Sigstore bundle (checksums.txt.bundle) — see the signs block in .goreleaser.yaml.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # GoReleaser uploads the signed artifacts into the DRAFT release Release Please created
+      # (use_existing_draft in .goreleaser.yaml); it neither creates nor publishes the release.
       - uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ needs.release-please.outputs.tag_name }}
       # SLSA build-provenance for the release archives (verify: gh attestation verify).
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: "dist/*.tar.gz"
-      # Publish the draft GoReleaser created. GitHub "immutable releases" rejects asset uploads to a
-      # published release (422), so .goreleaser.yaml sets release.draft: true and attaches all
-      # artifacts to the draft first; flipping draft→published here is the atomic step that makes the
-      # release (and its assets) immutable. Must run only after every artifact is attached above.
+      # Publish the draft now that every artifact is attached. GitHub "immutable releases" locks a
+      # release on publish, so this draft→published flip is the atomic step that makes the release
+      # (and its assets) immutable. Must run only after the uploads and attestation above.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+        run: gh release edit "${{ needs.release-please.outputs.tag_name }}" --draft=false --repo "${{ github.repository }}"
 
   docker:
-    needs: approve
+    needs: [release-please, approve]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,6 +90,8 @@ jobs:
       attestations: write # SLSA build-provenance for the image
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
       - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
       - uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -73,9 +103,11 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          # The workflow runs on a branch push, not a tag ref, so feed the tag explicitly (value=)
+          # rather than letting metadata-action read github.ref.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
             type=raw,value=latest
       - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         id: push

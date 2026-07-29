@@ -60,11 +60,14 @@ changelog:
       - "Merge branch"
 
 release:
-  # Create the release as a DRAFT, not published. GitHub "immutable releases" locks a release the
-  # instant it is published, after which asset uploads fail with "422 Cannot upload assets to an
-  # immutable release." GoReleaser uploads assets one-by-one AFTER creating the release, so a
-  # published-on-create release rejects every upload. Drafts stay mutable, so GoReleaser can attach
-  # all artifacts; the release.yml workflow then flips draft→published as a final step, which is the
-  # atomic transition that makes it immutable WITH its assets.
-  draft: true
-  prerelease: auto
+  # Release Please owns the release object: when its release PR merges it creates the tag and a
+  # DRAFT GitHub release (with the changelog as the body). GoReleaser only UPLOADS the built,
+  # cosign-signed artifacts into that existing draft — it does not create or publish the release.
+  # This is what makes GitHub "immutable releases" work: a release becomes immutable the instant it
+  # is published, and assets can only be attached while it is still a draft, so release.yml flips
+  # draft→published as its final step, after every artifact is attached.
+  draft: true # never auto-publish; the workflow publishes once uploads finish
+  use_existing_draft: true # attach to Release Please's draft instead of creating a new release
+  mode: keep-existing # keep Release Please's changelog body; don't overwrite it
+  replace_existing_artifacts: true # re-upload cleanly if a 422 says an asset already exists
+  # prerelease is decided by Release Please (its config), not here.

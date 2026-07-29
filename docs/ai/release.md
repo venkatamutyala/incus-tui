@@ -1,25 +1,36 @@
 # Release process
 
-Releases are tagged, signed, and gated. Cut one only when asked.
+Releases are **driven by Release Please** from the Conventional Commit history, then signed and
+gated. You don't tag by hand — you merge a release PR.
 
 ## Cut a release
 
-1. Ensure `main` is green in CI and the full verify suite passes locally (see
-   [conventions](conventions.md)).
-2. Tag and push:
-   ```sh
-   git tag -a vX.Y.Z -m "incus-tui vX.Y.Z — <summary>"
-   git push origin vX.Y.Z
-   ```
-3. The `release` workflow runs and **pauses at the protected `release` environment** — a human must
-   approve it (GitHub → Actions → the run → **Review deployments** → check `release` → **Approve and
-   deploy**). This is a deliberate supply-chain gate. Do **not** approve it programmatically on the
+1. Land your changes on `main` with **Conventional Commit** messages (`feat:`, `fix:`, `docs:`,
+   `ci:`, …). Pre-1.0 the config bumps a **patch** for `feat`/`fix` and a **minor** only for a
+   breaking change (`!` / `BREAKING CHANGE`) — see `release-please-config.json`.
+2. On each push to `main`, the `release-please` job opens/updates a **"chore(main): release X.Y.Z"
+   PR** that maintains `CHANGELOG.md` and the version in `.release-please-manifest.json`. Review it
+   like any PR.
+3. **Merge that release PR.** That is the "cut a release" action. Release Please then creates the git
+   tag `vX.Y.Z` and a **draft** GitHub Release (changelog as the body).
+4. The workflow **pauses at the protected `release` environment** — a human must approve it
+   (GitHub → Actions → the run → **Review deployments** → check `release` → **Approve and deploy**).
+   A deliberate supply-chain gate on top of the PR merge. Do **not** approve programmatically on the
    maintainer's behalf; surface the run URL and let them click.
-4. After approval, in parallel:
+5. After approval, in parallel:
    - GoReleaser builds the multi-arch linux binaries, signs `checksums.txt` into a cosign **keyless
-     Sigstore bundle** (`checksums.txt.bundle`), publishes the GitHub Release, and attaches SLSA
-     build-provenance.
+     Sigstore bundle** (`checksums.txt.bundle`), **uploads them into the draft** release
+     (`use_existing_draft`), attaches SLSA build-provenance, then **publishes** the draft
+     (`gh release edit --draft=false`) — the atomic step that makes the release immutable *with* its
+     assets (see the immutable-releases gotcha).
    - A second job builds + pushes the multi-arch GHCR image, also SLSA-attested.
+
+> Why merge-not-tag: the default `GITHUB_TOKEN` a tag pushed by Release Please would **not** trigger
+> a separate `on: push: tags` workflow, so build+publish live in the *same* workflow, gated on Release
+> Please's `release_created` output.
+
+**One-off / manual version:** add `Release-As: X.Y.Z` to a commit body, or a `release-as:` label, to
+force the next version. Reverting a bad release still means a new tag — tags/releases are immutable.
 
 ## Verify a published release
 
