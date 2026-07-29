@@ -86,15 +86,24 @@ The Incus client mirrors a guest command's stdout and stderr on **separate gorou
   default to `true`, so the old split-file flags (`--output-signature`/`--output-certificate`) are
   silently ignored. `.goreleaser.yaml`'s signs block uses `--bundle`. Don't "fix" it back to the
   deprecated flags.
-- **GitHub "immutable releases" ⇒ GoReleaser must create a DRAFT, then the workflow publishes it.**
-  When immutable releases are on, GitHub locks a release the instant it is *published*, and every
-  asset upload after that fails with `422 Cannot upload assets to an immutable release`. GoReleaser
-  creates the release and *then* uploads assets one-by-one, so a published-on-create release rejects
-  all of them (the release is created but ends up empty). Fix: `.goreleaser.yaml` sets
-  `release.draft: true` (drafts stay mutable so all artifacts attach), and `release.yml` flips it
-  with `gh release edit "$TAG" --draft=false` **as the last step**, after GoReleaser and the
-  attestation — that publish is the atomic transition that makes the release immutable *with* its
-  assets. Don't set `draft: false` back, and don't move the publish step ahead of artifact upload.
+- **Releases are Release-Please-driven; the trigger is `push: main`, not a tag.** `release.yml` runs
+  Release Please on every push to `main` to maintain the release PR; when that PR merges it creates
+  the tag + a **draft** release, and only then (`release_created == 'true'`) do the approve/goreleaser/
+  docker jobs run. The default `GITHUB_TOKEN` a tag Release Please pushes would **not** trigger a
+  separate `on: push: tags` workflow, which is why build+publish live in the *same* workflow gated on
+  `release_created`. Version/changelog config lives in `release-please-config.json` +
+  `.release-please-manifest.json` (manifest mode). `include-component-in-tag: false` keeps tags `vX.Y.Z`;
+  `force-tag-creation: true` makes the tag exist even though the release starts as a draft (GitHub
+  normally defers a draft's tag).
+- **GitHub "immutable releases" ⇒ attach assets to a DRAFT, publish LAST.** Immutable releases lock a
+  release the instant it is *published*; any asset upload after that fails with `422 Cannot upload
+  assets to an immutable release`. So Release Please creates the release as a **draft** (`draft: true`),
+  GoReleaser **uploads into that existing draft** (`use_existing_draft: true`, `mode: keep-existing`,
+  `replace_existing_artifacts: true` in `.goreleaser.yaml`) rather than creating/publishing its own,
+  and `release.yml` flips it live with `gh release edit "$TAG" --draft=false` **as the last step**,
+  after the uploads and the attestation. That publish is the atomic transition that makes the release
+  immutable *with* its assets. Don't set `draft: false`, don't let GoReleaser own the release object,
+  and don't move the publish step ahead of artifact upload.
 
 ## Templates
 
