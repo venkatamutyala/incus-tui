@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.10](https://github.com/venkatamutyala/incus-tui/compare/v0.0.9...v0.0.10) (2026-07-29)
+
+
+### Bug Fixes
+
+* show imported (local) images in the launch wizard and launch them locally ([b141a68](https://github.com/venkatamutyala/incus-tui/commit/b141a68a79e57d92e909788a25f90cdeb2a307f5))
+* show imported (local) images in the launch wizard and launch them locally ([20f65e2](https://github.com/venkatamutyala/incus-tui/commit/20f65e2bf14bce1eb672e5fec319439fb2f682f7))
+
 ## [0.0.9](https://github.com/venkatamutyala/incus-tui/compare/v0.0.8...v0.0.9) (2026-07-29)
 
 
