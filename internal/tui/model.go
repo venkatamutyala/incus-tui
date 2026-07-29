@@ -193,9 +193,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Point at the next step — the VM is created but still booting / running cloud-init.
 			cmd = m.setToast("launched "+msg.name+" — l: boot logs, s: shell in once it's up", false)
 		case msg.err == nil && msg.action == "resize":
-			// limits.cpu hotplugs; new memory needs a reboot, and a grown disk (done while
-			// stopped) applies on the next start — cloud images grow the fs onto it on boot.
-			cmd = m.setToast("resize "+msg.name+" — reboot/start to apply; cloud images grow the fs onto a bigger disk", false)
+			// limits.cpu hotplugs; new memory and a grown disk apply on the next start —
+			// cloud images auto-grow the filesystem onto a bigger disk.
+			cmd = m.setToast("resize "+msg.name+" — start it to apply; cloud images auto-grow the filesystem", false)
 		case msg.err == nil:
 			cmd = m.setToast(msg.action+" "+msg.name, false)
 		case errors.Is(msg.err, context.Canceled):
@@ -527,18 +527,16 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 
 	switch kind {
 	case formEdit:
-		cpu, mem := vars.cpu, withUnit(vars.mem, "MiB")
-		disk := diskResizeArg(vars.diskSeed, vars.disk) // "" unless the user actually changed it
-		// A disk resize needs the VM stopped (SetResources enforces this too). Catch it
-		// here so the user gets a clear hint instead of watching the op fail in busy mode.
-		if disk != "" {
-			if v, ok := m.vmByName(name); ok && v.StatusCode != api.Stopped {
-				m.mode = modeList
-				return m, toastAfter("stop "+name+" first to resize its disk", true)
-			}
+		// The disk field is only present when the VM is stopped (newEditForm gates it), so
+		// a running-VM edit carries no disk change and its cpu/ram still apply — no need to
+		// refuse the whole form. diskResizeArg is "" unless the user actually changed it.
+		edit := xincus.ResourceEdit{
+			CPU:  vars.cpu,
+			Mem:  withUnit(vars.mem, "MiB"),
+			Disk: diskResizeArg(vars.diskSeed, vars.disk),
 		}
 		return m.busy("resize", name, func(ctx context.Context) error {
-			return m.client.SetResources(ctx, name, cpu, mem, disk)
+			return m.client.SetResources(ctx, name, edit)
 		})
 	case formDelete:
 		if !vars.confirm {

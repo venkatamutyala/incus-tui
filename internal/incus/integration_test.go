@@ -16,6 +16,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/lxc/incus/v7/shared/units"
 )
 
 const testImageAlias = "ubuntu/24.04/cloud"
@@ -90,7 +92,7 @@ func TestLiveLifecycle(t *testing.T) {
 	}
 
 	// cpu edits apply to a running VM.
-	if err := c.SetResources(ctx, name, "2", "", ""); err != nil {
+	if err := c.SetResources(ctx, name, ResourceEdit{CPU: "2"}); err != nil {
 		t.Fatalf("SetResources cpu: %v", err)
 	}
 	vm, _ = c.GetVM(name)
@@ -98,7 +100,7 @@ func TestLiveLifecycle(t *testing.T) {
 		t.Errorf("after SetResources cpu = %q, want 2", vm.CPULimit)
 	}
 	// A disk resize is refused while the VM is running (must be stopped first).
-	if err := c.SetResources(ctx, name, "", "", "12GiB"); err == nil {
+	if err := c.SetResources(ctx, name, ResourceEdit{Disk: "12GiB"}); err == nil {
 		t.Error("SetResources disk on a running VM: expected an error, got nil")
 	}
 
@@ -113,15 +115,17 @@ func TestLiveLifecycle(t *testing.T) {
 	if err := c.ForceStop(ctx, name); err != nil {
 		t.Fatalf("ForceStop: %v", err)
 	}
-	if err := c.SetResources(ctx, name, "", "", "12GiB"); err != nil {
+	if err := c.SetResources(ctx, name, ResourceEdit{Disk: "12GiB"}); err != nil {
 		t.Fatalf("SetResources disk grow (stopped): %v", err)
 	}
 	vm, _ = c.GetVM(name)
-	if vm.DiskSize != "12GiB" {
-		t.Errorf("after disk grow, disk = %q, want 12GiB", vm.DiskSize)
+	// Compare by bytes, not exact string — assert "the disk grew to 12 GiB" rather than
+	// coupling to Incus echoing the config value verbatim.
+	if got, err := units.ParseByteSizeString(vm.DiskSize); err != nil || got != 12*1024*1024*1024 {
+		t.Errorf("after disk grow, disk = %q, want 12GiB (err=%v)", vm.DiskSize, err)
 	}
 	// A shrink must be rejected up front by growOnly, never reaching the daemon.
-	if err := c.SetResources(ctx, name, "", "", "8GiB"); err == nil {
+	if err := c.SetResources(ctx, name, ResourceEdit{Disk: "8GiB"}); err == nil {
 		t.Error("SetResources disk shrink: expected an error, got nil")
 	}
 

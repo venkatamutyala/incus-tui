@@ -195,15 +195,23 @@ func (c *Client) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// SetResources edits a VM's cpu, memory, and root-disk size in a single
-// read-modify-write. Any of cpu/mem/disk may be "" to leave that dimension
-// untouched. limits.cpu hotplugs and limits.memory applies on the next boot.
-// A disk resize is grow-only (a VM block disk cannot shrink) and requires the VM
-// to be STOPPED: growing a running VM's block disk is driver-dependent (a dir
-// pool holds the image open and rejects it), so we refuse it uniformly rather
-// than surface a confusing daemon error. Once resized, the guest grows its
-// filesystem onto the bigger disk on the next boot (cloud images do this).
-func (c *Client) SetResources(ctx context.Context, name, cpu, mem, disk string) error {
+// ResourceEdit describes an edit to a VM's resources. A "" field leaves that dimension
+// unchanged. Named fields keep call sites readable and transposition-proof (positional
+// cpu/mem/disk strings are trivially swappable without the compiler noticing).
+type ResourceEdit struct {
+	CPU  string // limits.cpu (cores)
+	Mem  string // limits.memory (unit-bearing, e.g. "2048MiB")
+	Disk string // root disk size (unit-bearing, e.g. "20GiB"); requires the VM STOPPED
+}
+
+// SetResources applies a ResourceEdit in a single read-modify-write. limits.cpu hotplugs
+// and limits.memory applies on the next boot. A disk resize is grow-only (a VM block disk
+// cannot shrink) and requires the VM to be STOPPED: growing a running VM's block disk is
+// driver-dependent (a dir pool holds the image open and rejects it), so we refuse it
+// uniformly rather than surface a confusing daemon error. Once resized, the guest grows
+// its filesystem onto the bigger disk on the next boot (cloud images do this). The UI
+// omits the disk field for a non-stopped VM; this stopped check is the authoritative guard.
+func (c *Client) SetResources(ctx context.Context, name string, edit ResourceEdit) error {
 	inst, etag, err := c.server.GetInstance(name)
 	if err != nil {
 		return fmt.Errorf("reading %q config: %w", name, err)
@@ -212,13 +220,13 @@ func (c *Client) SetResources(ctx context.Context, name, cpu, mem, disk string) 
 	if put.Config == nil {
 		put.Config = map[string]string{}
 	}
-	if cpu != "" {
-		put.Config["limits.cpu"] = cpu
+	if edit.CPU != "" {
+		put.Config["limits.cpu"] = edit.CPU
 	}
-	if mem != "" {
-		put.Config["limits.memory"] = mem
+	if edit.Mem != "" {
+		put.Config["limits.memory"] = edit.Mem
 	}
-	if disk != "" {
+	if edit.Disk != "" {
 		// Grow-only, and only on a stopped VM (see the method doc). Refuse up front with
 		// a clear message instead of letting the daemon reject an online resize murkily.
 		if inst.StatusCode != api.Stopped {
@@ -232,7 +240,7 @@ func (c *Client) SetResources(ctx context.Context, name, cpu, mem, disk string) 
 			return fmt.Errorf("resizing %q disk: no root disk device to size", name)
 		}
 		if cur := root["size"]; cur != "" {
-			if err := growOnly(cur, disk); err != nil {
+			if err := growOnly(cur, edit.Disk); err != nil {
 				return fmt.Errorf("resizing %q disk: %w", name, err)
 			}
 		}
@@ -240,7 +248,7 @@ func (c *Client) SetResources(ctx context.Context, name, cpu, mem, disk string) 
 		for k, v := range root {
 			dev[k] = v
 		}
-		dev["size"] = disk
+		dev["size"] = edit.Disk
 		if put.Devices == nil {
 			put.Devices = map[string]map[string]string{}
 		}

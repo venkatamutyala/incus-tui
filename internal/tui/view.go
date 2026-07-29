@@ -115,7 +115,7 @@ func (m model) bottomBar() string {
 	case modeDetail:
 		// esc-first so the escape hatch survives the renderer's right-edge clip on a
 		// narrow terminal.
-		return m.styles.help.Render("esc back · e edit · p snapshot · l logs · y copy IP · s shell · d delete")
+		return m.styles.help.Render("esc back · e edit cpu/ram/disk · p snapshot · l logs · y copy IP · s shell · d delete")
 	case modeLogs:
 		view := "console"
 		if m.logsShowCloudInit {

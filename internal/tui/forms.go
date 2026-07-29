@@ -10,6 +10,7 @@ import (
 	"charm.land/huh/v2"
 
 	"github.com/lxc/incus/v7/shared/api"
+	"github.com/lxc/incus/v7/shared/units"
 	xincus "github.com/venkatamutyala/incus-tui/internal/incus"
 )
 
@@ -123,22 +124,50 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 }
 
 func newEditForm(vm xincus.VM) (*huh.Form, *formVars) {
-	// Seed disk from the effective root size (normalizeMem is a generic byte→IEC
-	// renderer) so an untouched, unit-bearing value isn't rescaled by withUnit later.
-	v := &formVars{cpu: vm.CPULimit, mem: normalizeMem(vm.MemLimit), disk: normalizeMem(vm.DiskSize)}
-	v.diskSeed = v.disk // remember the seeded size so an untouched submit doesn't pin it as an override
-	form := huh.NewForm(huh.NewGroup(
+	// normalizeByteSize renders the seed unit-bearing so an untouched value isn't rescaled
+	// by withUnit on submit.
+	v := &formVars{cpu: vm.CPULimit, mem: normalizeByteSize(vm.MemLimit)}
+	fields := []huh.Field{
 		huh.NewInput().Key("cpu").Title("vCPUs").
 			Placeholder("e.g. 2").Value(&v.cpu).Validate(validateCPU),
 		huh.NewInput().Key("mem").Title("Memory (MiB or 2GiB)").
 			Placeholder("e.g. 2048").Value(&v.mem).Validate(validateSize),
-		// Disk is grow-only (a VM block disk can't shrink); the grow guard lives in the
-		// service layer (SetResources), so here we only enforce the size format. Blank
-		// leaves it unchanged.
-		huh.NewInput().Key("disk").Title("Disk (GiB, grow only — VM must be stopped)").
-			Placeholder("e.g. 20GiB").Value(&v.disk).Validate(validateSize),
-	))
-	return applyEscKeymap(form), v
+	}
+	// A disk resize needs the VM stopped, so only offer the editable field then; a running
+	// VM gets an informational note instead. This is what keeps a running-VM edit from
+	// silently dropping the user's cpu/ram changes just because they also touched the disk.
+	if vm.StatusCode == api.Stopped {
+		v.disk = normalizeByteSize(vm.DiskSize)
+		v.diskSeed = v.disk // remember the seed so an untouched submit doesn't pin it as an override
+		fields = append(fields, huh.NewInput().Key("disk").Title("Disk (GiB)").
+			Description("Grow only — can't shrink. Applies on the next start.").
+			Placeholder("e.g. 20GiB").Value(&v.disk).Validate(growOnlyValidator(v.diskSeed)))
+	} else {
+		fields = append(fields, huh.NewNote().Title("Disk").
+			Description("Stop the VM to resize its root disk (grow only)."))
+	}
+	return applyEscKeymap(huh.NewForm(huh.NewGroup(fields...))), v
+}
+
+// growOnlyValidator returns a size-field validator that also rejects a value below the
+// seeded current size, so a shrink is caught inline instead of after a daemon round-trip.
+// The service layer re-checks authoritatively (SetResources → growOnly).
+func growOnlyValidator(current string) func(string) error {
+	return func(s string) error {
+		if err := validateSize(s); err != nil {
+			return err
+		}
+		s = strings.TrimSpace(s)
+		if s == "" || current == "" {
+			return nil // blank leaves it unchanged; an unknown current size can't be compared
+		}
+		cur, err1 := units.ParseByteSizeString(current)
+		req, err2 := units.ParseByteSizeString(withUnit(s, "GiB"))
+		if err1 == nil && err2 == nil && req < cur {
+			return fmt.Errorf("grow only: %s is smaller than the current %s", withUnit(s, "GiB"), current)
+		}
+		return nil
+	}
 }
 
 func newSnapManageForm(vm xincus.VM) (*huh.Form, *formVars) {
@@ -274,6 +303,7 @@ func diskResizeArg(seed, field string) string {
 	if field == "" || field == strings.TrimSpace(seed) {
 		return ""
 	}
+	// A bare number is read as GiB (root disks are GiB-scale); a unit-bearing value passes through.
 	return withUnit(field, "GiB")
 }
 
@@ -288,10 +318,11 @@ func withUnit(s, defUnit string) string {
 	return s
 }
 
-// normalizeMem renders a unit-less byte count (a limits.memory set out-of-band, which is
-// valid in Incus) as a unit-bearing string, so the edit field never starts as a bare
-// number that withUnit would later rescale by 1024² when re-submitted untouched.
-func normalizeMem(s string) string {
+// normalizeByteSize renders a unit-less byte count (e.g. a limits.memory or disk size set
+// out-of-band, which is valid in Incus) as a unit-bearing IEC string, so an edit field never
+// starts as a bare number that withUnit would later rescale by 1024² when re-submitted
+// untouched. It is unit-agnostic (bytes → the largest clean IEC unit), used for mem and disk.
+func normalizeByteSize(s string) string {
 	s = strings.TrimSpace(s)
 	if !bareNum.MatchString(s) {
 		return s // already has a unit (or is empty/odd) — leave it

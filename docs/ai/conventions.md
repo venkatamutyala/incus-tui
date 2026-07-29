@@ -46,6 +46,18 @@ view.go), then update the column-count assertions in `TestVisibleColsDropsAndSta
 `TestSyncTableResizeShrinkNoPanic`. (A column missing from `colDropOrder` overflows narrow terminals —
 see the gotchas guide.)
 
+**Add an edit-form field.** To add another editable VM resource to the `e` form (like the disk field):
+1. Seed the field in `newEditForm` (forms.go) via `normalizeByteSize()` for a size (so an untouched
+   unit-bearing value isn't rescaled by `withUnit` — see the gotchas guide).
+2. If the value is *seeded*, capture the seed (e.g. `diskSeed`) and compute the submit value with a
+   change-detecting helper (`diskResizeArg`) so an unchanged field is a no-op, not a silent rewrite.
+3. If the edit is only valid in a certain VM state, **gate the field at construction** (offer it only
+   in that state, show a `huh.NewNote` otherwise) rather than refusing the whole form on submit —
+   refusing would silently drop the other fields' edits.
+4. Thread it through the `formEdit` case in `completeForm` (model.go) into the service call, and add
+   the authoritative guard in the service layer (the UI gate is only a hint against stale cached state).
+5. Pin the seed→submit mapping and any gate with unit tests; exercise the live path in the integration test.
+
 ## Tests
 
 - Service layer: daemon-free unit tests in `internal/incus/*_test.go`; live `-tags integration`

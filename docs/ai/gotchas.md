@@ -51,10 +51,24 @@ The Incus client mirrors a guest command's stdout and stderr on **separate gorou
 ## Sizes / Incus units
 
 - Incus reads a **unit-less** `limits.memory` / disk size as **bytes**. The launch form's number
-  fields append a unit via `withUnit(v, "MiB"|"GiB")`. Incus also rejects decimals (`1.5GiB`) and
-  embedded spaces (`2 GiB`) — `validateSize` enforces whole-number-plus-unit only.
-- The edit-cpu/ram form seeds memory through `normalizeMem()`, so a pre-existing **bare-byte**
-  `limits.memory` isn't re-scaled by `withUnit` when re-submitted untouched.
+  fields append a unit via `withUnit(v, "MiB"|"GiB")`. `validateSize` enforces whole-number-plus-**IEC**
+  unit only — it rejects decimals (`1.5GiB`), spaces (`2 GiB`), **and SI units** (`10GB`): every field
+  advertises IEC, and `10GB` (≈9.31GiB) under a "GiB" label would read as a shrink on the disk field.
+- The edit-cpu/ram/disk form seeds memory **and disk** through `normalizeByteSize()`, so a pre-existing
+  **bare-byte** value isn't re-scaled by `withUnit` when re-submitted untouched.
+- **VM disk resize** (`SetResources` disk arg, `internal/incus/instances.go`): three linked rules,
+  each with a regression test — re-breaking any is a regression.
+  - **Grow-only.** `growOnly()` rejects a shrink before the daemon round-trip (a VM block disk can't
+    shrink). This helper was previously deleted with the storage-pool feature; it now backs disk resize.
+    An inline `growOnlyValidator` also catches a shrink in-field.
+  - **Requires a STOPPED VM.** Growing a running VM's block disk is driver-dependent (a `dir` pool holds
+    the image open and rejects it). `SetResources` refuses it authoritatively; `newEditForm` **omits the
+    editable disk field** for a non-stopped VM (showing a note instead) so a cpu/ram edit is never
+    dropped just because the form also had a disk field. Don't collapse these two into one.
+  - **An unchanged edit must not pin the disk.** The disk field is *seeded* with the current size, so
+    `diskResizeArg` returns `""` (leave the root device alone) unless the value actually changed —
+    otherwise a cpu/ram-only edit would rewrite `root.size` and convert a profile-inherited disk into a
+    pinned instance override.
 
 ## Signing / release
 
