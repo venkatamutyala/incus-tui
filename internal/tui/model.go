@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	modeLaunchEdit
 	modeLogs
 	modeBusy
+	modeImages
 )
 
 type model struct {
@@ -39,6 +41,7 @@ type model struct {
 
 	help        help.Model
 	table       table.Model
+	imgTable    table.Model // the modeImages local-image list
 	detail      viewport.Model
 	logs        viewport.Model
 	spinner     spinner.Model
@@ -48,12 +51,22 @@ type model struct {
 	vms      []xincus.VM
 	filtered []xincus.VM
 
+	images              []xincus.LocalImage       // modeImages rows
+	releases            []xincus.CodespaceRelease // cached for the import picker
+	selectedFingerprint string                    // the image the delete-image confirm targets
+
 	width, height int
 	mode          mode
 	selectedName  string
 	filtering     bool
 	busyText      string
 	cancel        context.CancelFunc // cancels the in-flight busy op (esc)
+
+	// Progress-reporting busy op (the codespace import): importing gates the richer status line;
+	// busyProg is the latest ImportProgress; busyStart drives the live elapsed timer.
+	importing bool
+	busyProg  xincus.ImportProgress
+	busyStart time.Time
 
 	form          *huh.Form
 	vars          *formVars
@@ -91,13 +104,18 @@ func New(c *xincus.Client) model {
 	st := newStyles()
 	sp.Style = st.spinnerSty
 
+	// restrictPaging trims the bubbles table's extra paging keys (b, space, u, d, ctrl+u,
+	// ctrl+d) so our single-key actions don't leak into table navigation.
+	restrictPaging := func(t *table.Model) {
+		t.KeyMap.PageUp.SetKeys("pgup")
+		t.KeyMap.PageDown.SetKeys("pgdown")
+		t.KeyMap.HalfPageUp.SetEnabled(false)
+		t.KeyMap.HalfPageDown.SetEnabled(false)
+	}
 	tbl := table.New()
-	// The bubbles table binds extra paging keys (b, space, u, d, ctrl+u, ctrl+d)
-	// that would otherwise leak through our action fallthrough; restrict them.
-	tbl.KeyMap.PageUp.SetKeys("pgup")
-	tbl.KeyMap.PageDown.SetKeys("pgdown")
-	tbl.KeyMap.HalfPageUp.SetEnabled(false)
-	tbl.KeyMap.HalfPageDown.SetEnabled(false)
+	restrictPaging(&tbl)
+	imgTbl := table.New()
+	restrictPaging(&imgTbl)
 
 	m := model{
 		client:      c,
@@ -105,6 +123,7 @@ func New(c *xincus.Client) model {
 		keys:        defaultKeys(),
 		help:        help.New(),
 		table:       tbl,
+		imgTable:    imgTbl,
 		detail:      viewport.New(),
 		logs:        viewport.New(),
 		spinner:     sp,
@@ -184,8 +203,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case opDoneMsg:
 		m.cancel = nil
+		m.importing = false
 		if m.mode == modeBusy {
 			m.mode = modeList
+		}
+		// Image ops belong to the images view: land back there and refresh it (not the VM list).
+		if msg.action == "delete-image" {
+			m.mode = modeImages
+			m.layout()
+			var cmd tea.Cmd
+			if msg.err != nil {
+				cmd = m.setToast("delete image "+msg.name+": "+msg.err.Error(), true)
+			} else {
+				cmd = m.setToast("deleted image "+msg.name, false)
+			}
+			return m, tea.Batch(loadImages(m.client), cmd)
 		}
 		var cmd tea.Cmd
 		switch {
@@ -196,6 +228,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// limits.cpu hotplugs; new memory and a grown disk apply on the next start —
 			// cloud images auto-grow the filesystem onto a bigger disk.
 			cmd = m.setToast("resize "+msg.name+" — start it to apply; cloud images auto-grow the filesystem", false)
+		case msg.err == nil && msg.action == "import":
+			// The image now shows in the launch wizard; refresh the images view too.
+			cmd = m.setToast("imported "+msg.name+" — press n to launch it", false)
+			return m, tea.Batch(loadVMs(m.client), loadImages(m.client), cmd)
 		case msg.err == nil:
 			cmd = m.setToast(msg.action+" "+msg.name, false)
 		case errors.Is(msg.err, context.Canceled):
@@ -214,12 +250,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setToast("images: "+msg.err.Error(), true)
 		}
 		m.launchImages, m.launchTemplates = msg.images, msg.templates
-		vars := &formVars{cpu: "2", mem: "2048", disk: "12"}
+		vars := &formVars{cpu: "2", mem: "2048", disk: "50"}
 		m.vars, m.formKind = vars, formLaunch
 		m.form = newLaunchForm(msg.images, msg.templates, vars, vmNames(m.vms)).
 			WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
 		m.mode = modeForm
 		return m, m.form.Init()
+
+	case codespaceReleasesMsg:
+		if m.mode != modeBusy { // user pressed esc while the release list was loading
+			return m, nil
+		}
+		if msg.err != nil {
+			m.mode = modeList
+			return m, m.setToast("releases: "+msg.err.Error(), true)
+		}
+		// Fail loud & early: the codespace image is x86_64-only, so an arm64 host can't run it —
+		// say so here instead of after a multi-GB download.
+		if runtime.GOARCH != "amd64" {
+			m.mode = modeList
+			return m, m.setToast("the GlueOps codespace image is x86_64-only; this host is "+runtime.GOARCH, true)
+		}
+		rels := importableReleases(msg.releases)
+		if len(rels) == 0 {
+			m.mode = modeList
+			return m, m.setToast("no importable codespace releases found on github.com/glueops/codespaces", true)
+		}
+		m.releases = rels
+		vars := &formVars{}
+		m.vars, m.formKind = vars, formImport
+		m.form = newImportForm(rels, m.importedTags(), vars).
+			WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
+		m.mode = modeForm
+		return m, m.form.Init()
+
+	case imagesMsg:
+		if msg.err != nil {
+			return m, m.setToast("images: "+msg.err.Error(), true)
+		}
+		m.images = msg.images
+		m.syncImages()
+		return m, nil
+
+	case busyProgressMsg:
+		// Interim progress only refreshes the status line; opDoneMsg is still terminal. Re-arm
+		// the listener so it keeps draining until the producer closes the channel.
+		m.busyProg = msg.p
+		return m, listenProgress(msg.ch)
 
 	case consoleLogMsg:
 		if m.mode == modeLogs && !m.logsShowCloudInit && msg.name == m.selectedName {
@@ -273,6 +350,10 @@ func (m model) routeInactive(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.logs, cmd = m.logs.Update(msg)
 		return m, cmd
+	case modeImages:
+		var cmd tea.Cmd
+		m.imgTable, cmd = m.imgTable.Update(msg)
+		return m, cmd
 	case modeBusy:
 		return m, nil
 	default:
@@ -311,6 +392,8 @@ func (m model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case modeDetail:
 		return m.handleDetailKey(k)
+	case modeImages:
+		return m.handleImagesKey(k)
 	default:
 		if m.filtering {
 			return m.handleFilterKey(k)
@@ -461,6 +544,12 @@ func (m model) handleAction(k tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
 	case key.Matches(k, m.keys.Delete):
 		mm, cmd := m.openForm(formDelete)
 		return mm, cmd, true
+	case key.Matches(k, m.keys.Import):
+		mm, cmd := m.startImport()
+		return mm, cmd, true
+	case key.Matches(k, m.keys.Images):
+		mm, cmd := m.openImages()
+		return mm, cmd, true
 	}
 	return m, nil, false
 }
@@ -482,9 +571,19 @@ func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) cancelForm() model {
-	m.mode = modeList
+	// Return to wherever the form was opened from. The delete-image confirm is reachable only from
+	// the images view, so esc must land back there — matching the huh "Cancel" button path in
+	// completeForm; otherwise esc would eject the user to the VM list mid image-management.
+	back := modeList
+	if m.formKind == formDeleteImage {
+		back = modeImages
+	}
+	m.mode = back
 	m.form = nil
 	m.formKind = formNone
+	if back == modeImages {
+		m.layout()
+	}
 	return m
 }
 
@@ -569,6 +668,25 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		m.editor.SetHeight(max(6, m.height-3))
 		m.mode = modeLaunchEdit
 		return m, m.editor.Focus()
+	case formImport:
+		if !vars.confirm {
+			m.mode = modeList
+			return m, m.setToast("import cancelled", false)
+		}
+		tag := vars.tag
+		return m.busyProgress("import", "glueops-codespace-"+tag, func(ctx context.Context, onProgress func(xincus.ImportProgress)) error {
+			_, err := m.client.ImportCodespaceImage(ctx, tag, onProgress)
+			return err
+		})
+	case formDeleteImage:
+		if !vars.confirm {
+			m.mode = modeImages
+			return m, m.setToast("delete cancelled", false)
+		}
+		fp := m.selectedFingerprint
+		return m.busy("delete-image", name, func(ctx context.Context) error {
+			return m.client.DeleteImage(ctx, fp)
+		})
 	}
 	m.mode = modeList
 	return m, nil
@@ -623,6 +741,11 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			spec := m.pendingLaunch
 			spec.CloudInitUser = content
 			return m.busy("launch", spec.Name, func(ctx context.Context) error {
+				// Blast-radius guard: refuse if the shared pool can't hold the root disk, rather
+				// than letting the daemon hit ENOSPC and disturb existing VMs on a dir pool.
+				if err := m.client.CheckLaunchSpace(ctx, spec.DiskSize); err != nil {
+					return err
+				}
 				return m.client.CreateVM(ctx, spec)
 			})
 		}
@@ -637,6 +760,180 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) startLaunch() (tea.Model, tea.Cmd) {
 	m.mode, m.busyText = modeBusy, "loading images…"
 	return m, loadLaunchData(m.client)
+}
+
+// startImport opens the GlueOps codespace importer: fetch the release list (busy), then the
+// codespaceReleasesMsg handler validates the host arch and opens the release picker.
+func (m model) startImport() (tea.Model, tea.Cmd) {
+	m.mode, m.busyText, m.importing = modeBusy, "loading releases…", false
+	return m, loadReleases(m.client)
+}
+
+// openImages enters the local-image management view and (re)loads its rows.
+func (m model) openImages() (tea.Model, tea.Cmd) {
+	m.mode = modeImages
+	m.layout()
+	m.imgTable.Focus()
+	return m, loadImages(m.client)
+}
+
+// handleImagesKey drives the modeImages list: navigate, d to delete the selected image, I to
+// import, R to refresh, esc back to the VM list.
+func (m model) handleImagesKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(k, m.keys.Back), key.Matches(k, m.keys.Quit):
+		m.mode = modeList
+		m.layout()
+		return m, nil
+	case key.Matches(k, m.keys.Import):
+		return m.startImport()
+	case key.Matches(k, m.keys.Delete):
+		return m.startDeleteImage()
+	case key.Matches(k, m.keys.Refresh):
+		return m, loadImages(m.client)
+	}
+	var cmd tea.Cmd
+	m.imgTable, cmd = m.imgTable.Update(k)
+	return m, cmd
+}
+
+// startDeleteImage opens a confirm for the image under the cursor.
+func (m model) startDeleteImage() (tea.Model, tea.Cmd) {
+	img, ok := m.currentImage()
+	if !ok {
+		return m, nil
+	}
+	form, vars := newDeleteImageForm(img)
+	m.formKind, m.vars = formDeleteImage, vars
+	m.selectedFingerprint, m.selectedName = img.Fingerprint, imageLabel(img)
+	m.form = form.WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
+	m.mode = modeForm
+	return m, m.form.Init()
+}
+
+// busyProgress runs a long, progress-reporting op (the codespace import). Like busy() it is
+// esc-cancelable and backstopped, but it also streams ImportProgress into the status line. A cap-1
+// channel carries progress; the op goroutine is its SOLE owner and closes it on every exit path
+// (defer close), so the listener never sends on — nor closes — a live channel. Cancellation is
+// ctx-cancel only. Coalescing + throttling live in the onProgress adapter here, keeping the service
+// callback dumb and all concurrency in this one testable place.
+func (m model) busyProgress(action, name string, fn func(context.Context, func(xincus.ImportProgress)) error) (tea.Model, tea.Cmd) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	m.cancel = cancel
+	m.mode, m.busyText = modeBusy, action+" "+name
+	m.importing, m.busyProg, m.busyStart = true, xincus.ImportProgress{}, time.Now()
+
+	progCh := make(chan xincus.ImportProgress, 1)
+	var lastEmit time.Time
+	lastPhase := ""
+	onProgress := func(p xincus.ImportProgress) {
+		now := time.Now()
+		send, block := progressEmit(lastPhase, now.Sub(lastEmit), p)
+		if !send {
+			return
+		}
+		lastEmit, lastPhase = now, p.Phase
+		if block {
+			// A phase change emits exactly once — block until the listener drains (fast, cap-1) or
+			// the op is cancelled, so coalescing can't lose it and freeze the status line. Runs on
+			// the producer goroutine.
+			select {
+			case progCh <- p:
+			case <-ctx.Done():
+			}
+			return
+		}
+		select {
+		case progCh <- p: // cap-1
+		default: // coalesce — drop if the listener hasn't drained the previous byte update yet
+		}
+	}
+	run := func() tea.Msg {
+		defer cancel()
+		defer close(progCh) // sole owner, closes exactly once on success/error/cancel/panic-return
+		return opDoneMsg{action: action, name: name, err: fn(ctx, onProgress)}
+	}
+	return m, tea.Batch(run, listenProgress(progCh))
+}
+
+// progressEmit is the pure throttle/coalesce policy for import progress updates: a phase change
+// (which the service emits exactly once) must always be sent and must BLOCK so the cap-1 channel
+// can't coalesce it away; a same-phase byte update within 200 ms of the last emit is dropped
+// (throttle); otherwise it is sent non-blocking (coalesce). Extracted so the policy is unit-testable
+// without goroutines — the send mechanics stay in busyProgress.
+func progressEmit(prevPhase string, sinceLast time.Duration, p xincus.ImportProgress) (send, block bool) {
+	if p.Phase != prevPhase {
+		return true, true
+	}
+	if sinceLast < 200*time.Millisecond {
+		return false, false
+	}
+	return true, false
+}
+
+// currentImage returns the local image under the images-table cursor.
+func (m model) currentImage() (xincus.LocalImage, bool) {
+	i := m.imgTable.Cursor()
+	if i < 0 || i >= len(m.images) {
+		return xincus.LocalImage{}, false
+	}
+	return m.images[i], true
+}
+
+// importedTags maps a release tag → true when its per-tag alias (glueops-codespace-<tag>) is
+// already in the local store, so the picker can mark it "✓ imported". Best-effort: it reflects the
+// last images load (the import-time alias-gate is the authoritative idempotency check).
+func (m model) importedTags() map[string]bool {
+	const prefix = "glueops-codespace-"
+	out := make(map[string]bool)
+	for _, img := range m.images {
+		for _, a := range img.Aliases {
+			if strings.HasPrefix(a, prefix) {
+				out[strings.TrimPrefix(a, prefix)] = true
+			}
+		}
+	}
+	return out
+}
+
+// importableReleases keeps only releases that actually carry a codespace image (HasImage), so the
+// picker never offers a tag whose import would immediately fail.
+func importableReleases(rels []xincus.CodespaceRelease) []xincus.CodespaceRelease {
+	out := make([]xincus.CodespaceRelease, 0, len(rels))
+	for _, r := range rels {
+		if r.HasImage {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// syncImages rebuilds the images-table columns and rows from m.images, sizing the flexible ALIAS
+// column to the current width so the row never overflows (the AltScreen clips, it doesn't wrap).
+func (m *model) syncImages() {
+	fixed := 16 + 10 + 12 + 14 + 2*5 // TYPE+SIZE+CREATED+FINGERPRINT + ~2 pad/col
+	aliasW := max(16, m.width-fixed)
+	cols := []table.Column{
+		{Title: "ALIAS", Width: aliasW},
+		{Title: "TYPE", Width: 16},
+		{Title: "SIZE", Width: 10},
+		{Title: "CREATED", Width: 12},
+		{Title: "FINGERPRINT", Width: 14},
+	}
+	m.imgTable.SetRows(nil) // clear before shrinking columns (bubbles panics otherwise)
+	m.imgTable.SetColumns(cols)
+	rows := make([]table.Row, len(m.images))
+	for i, img := range m.images {
+		created := ""
+		if !img.CreatedAt.IsZero() {
+			created = img.CreatedAt.Format("2006-01-02")
+		}
+		rows[i] = table.Row{
+			imageLabel(img), orDash(img.Type), formatBytes(img.Size), created,
+			img.Fingerprint[:min(12, len(img.Fingerprint))],
+		}
+	}
+	m.imgTable.SetRows(rows)
 }
 
 func (m model) openLogs() (tea.Model, tea.Cmd) {
@@ -719,6 +1016,12 @@ func (m model) quit() (tea.Model, tea.Cmd) {
 	if !m.quitting {
 		m.quitting = true
 		close(m.eventsDone)
+		// Cancel any in-flight op (e.g. a codespace import) so its ctx-tied read loops unwind and
+		// their deferred temp-dir cleanup runs — quitting via ctrl+c otherwise orphans a partial
+		// multi-GB download (the next import also sweeps stale dirs as a backstop).
+		if m.cancel != nil {
+			m.cancel()
+		}
 	}
 	return m, tea.Quit
 }
@@ -907,6 +1210,10 @@ func (m *model) layout() {
 	m.table.SetHeight(bodyH)
 	m.table.Focus()
 	m.syncTable()
+
+	m.imgTable.SetWidth(m.width)
+	m.imgTable.SetHeight(bodyH)
+	m.syncImages()
 
 	m.detail.SetWidth(m.width)
 	m.detail.SetHeight(bodyH)

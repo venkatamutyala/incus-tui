@@ -94,6 +94,43 @@ The Incus client mirrors a guest command's stdout and stderr on **separate gorou
 - A `# name: <label>` header comment overrides the picker's display name (filenames can't contain
   `/` or spaces). The body must still start with `#cloud-config` and pass `ValidateCloudInit`.
 
+## Codespace image import (`I`) / images view (`i`)
+
+- **`Type: "virtual-machine"` in `CreateImage` is load-bearing.** The Incus client derives the
+  multipart rootfs field name from `ImageCreateArgs.Type`; only `"virtual-machine"` makes the daemon
+  register a **VM** image (otherwise it's a *container* image that can't launch as a VM). This is the
+  one assertion the live integration test pins (`TestLiveCodespaceImportMechanism`). Don't drop or
+  rename the field.
+- **Idempotency is deterministic, not incidental.** The import fingerprint is stable because
+  `buildMetadata` writes `creation_date` from the release's `published_at` as a **fixed UTC Unix
+  timestamp** — same tag → same fingerprint → re-import is a no-op. Change that layout (local time, a
+  wall-clock `now`, RFC3339) and every re-import re-downloads 5 GB and orphans the old image. The
+  service also **alias-gates** (`glueops-codespace-<tag>`): if the alias exists it skips the download
+  entirely and just refreshes the rolling `latest`.
+- **Progress-busy is a distinct variant of `busy()` — mind the channel ownership.** `busyProgress()`
+  (model.go) streams `ImportProgress` over a **cap-1** channel while the op runs. The **producer
+  goroutine is the sole owner** and closes it via `defer close(progCh)` on every exit
+  (success/error/cancel); the listener (`listenProgress`) only *reads* and re-arms — it must **never**
+  close the channel, and cancel is **ctx-cancel**, never an external close (send-on-closed panics the
+  TUI). Coalescing + the ~200 ms throttle live in the `onProgress` adapter, so the service callback
+  stays a dumb synchronous function. `opDoneMsg` is still the terminal signal; `busyProgressMsg` only
+  refreshes the status line. The rich single-line status must not wrap — `frameView()`'s width clamp
+  truncates it (leftmost = highest priority).
+- **Preflight the POOL, not TMPDIR, before import *and* launch.** On a `dir` pool the image store and
+  every VM's `root.img` share one filesystem, so filling it gives **running VMs ENOSPC** (guest
+  corruption, not a clean failure). Both paths call `checkPoolSpace`/`CheckLaunchSpace`
+  (`GetStoragePoolResources` on the default profile's root pool) and refuse with a concrete message.
+  This is the mandatory mitigation for the roomy **50 GiB** default launch disk.
+- **`retargetLatest` never clobbers a user's alias.** `UpdateImageAlias` is a blind PUT, so before
+  moving `glueops-codespace-latest` it checks the current target actually carries a
+  `glueops-codespace-*` alias (i.e. we own it); otherwise it refuses.
+- **The split-asset naming is the one brittle contract.** `codespacePartRe`
+  (`\.qcow2\.tar\.part_[a-z]+$`) is the single source of truth used by both `HasImage` detection and
+  the downloader. If a release has assets but none match, the importer emits "publish format may have
+  changed" rather than silently doing the wrong thing. `assemble()` sorts by the fixed-width base-26
+  `split` suffix and **verifies contiguity** — a gap is an error, not a corrupt concatenation (don't
+  trust GitHub's asset array order).
+
 ## Other
 
 - The `loadingVMs` guard only debounces the **tick/event** path (`periodicLoad()`). Direct
