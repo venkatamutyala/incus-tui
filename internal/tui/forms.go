@@ -244,10 +244,13 @@ func validateCPU(s string) error {
 	return nil
 }
 
-// Whole numbers only, no embedded space, and units spelled the way Incus accepts them —
-// Incus rejects decimals like "1.5GiB" and a space like "2 GiB", so the form must too.
+// Whole numbers only, no embedded space, and IEC units only. Every size field advertises
+// IEC (MiB/GiB), and a bare number is read in the field's IEC unit — so we deliberately
+// reject SI units (kB/MB/GB/TB) too: "10GB" (=10^9 B ≈ 9.31GiB) would be smaller than a
+// "10GiB" label implies and, for the grow-only disk field, would read as a confusing
+// shrink. Incus also rejects decimals ("1.5GiB") and spaces ("2 GiB"), so the form must too.
 var (
-	sizeRe  = regexp.MustCompile(`^\d+(B|kB|KiB|MB|MiB|GB|GiB|TB|TiB)?$`)
+	sizeRe  = regexp.MustCompile(`^\d+(B|KiB|MiB|GiB|TiB)?$`)
 	bareNum = regexp.MustCompile(`^\d+$`)
 )
 

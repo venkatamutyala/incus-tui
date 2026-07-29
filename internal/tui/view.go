@@ -263,7 +263,13 @@ func renderDetail(s styles, v xincus.VM) string {
 	row("Age", formatAge(v.Age()))
 	row("CPU limit", orDash(v.CPULimit))
 	row("Mem limit", orDash(v.MemLimit))
-	row("Disk size", orDash(v.DiskSize))
+	// An empty size means the root disk has no explicit size — it uses the pool default.
+	// Show that rather than "-", which would misread as a zero/unknown-size disk.
+	disk := v.DiskSize
+	if disk == "" {
+		disk = "(pool default)"
+	}
+	row("Disk size", disk)
 	row("Agent", boolStr(v.AgentReady, "ready", "not ready"))
 	if v.AgentReady {
 		row("CPU time", fmt.Sprintf("%.1fs", float64(v.CPUUsageNS)/1e9))

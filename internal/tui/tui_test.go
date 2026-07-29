@@ -142,8 +142,9 @@ func TestMemCell(t *testing.T) {
 }
 
 func TestValidateSize(t *testing.T) {
-	ok := []string{"", "2048", "12", "2GiB", "512MiB", "100GB"}
-	bad := []string{"1.5", "1.5GiB", "2 GiB", "2gib", "abc", "12GiBx"}
+	ok := []string{"", "2048", "12", "2GiB", "512MiB", "4TiB"}
+	// SI units are rejected: fields advertise IEC (MiB/GiB), and "10GB" ≠ "10GiB".
+	bad := []string{"1.5", "1.5GiB", "2 GiB", "2gib", "abc", "12GiBx", "100GB", "10MB", "1kB"}
 	for _, s := range ok {
 		if err := validateSize(s); err != nil {
 			t.Errorf("validateSize(%q) rejected, want accepted: %v", s, err)
