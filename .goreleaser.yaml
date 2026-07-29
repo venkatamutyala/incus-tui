@@ -60,5 +60,11 @@ changelog:
       - "Merge branch"
 
 release:
-  draft: false
+  # Create the release as a DRAFT, not published. GitHub "immutable releases" locks a release the
+  # instant it is published, after which asset uploads fail with "422 Cannot upload assets to an
+  # immutable release." GoReleaser uploads assets one-by-one AFTER creating the release, so a
+  # published-on-create release rejects every upload. Drafts stay mutable, so GoReleaser can attach
+  # all artifacts; the release.yml workflow then flips draft→published as a final step, which is the
+  # atomic transition that makes it immutable WITH its assets.
+  draft: true
   prerelease: auto
