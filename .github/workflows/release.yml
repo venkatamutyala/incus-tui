@@ -43,6 +43,14 @@ jobs:
       - uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: "dist/*.tar.gz"
+      # Publish the draft GoReleaser created. GitHub "immutable releases" rejects asset uploads to a
+      # published release (422), so .goreleaser.yaml sets release.draft: true and attaches all
+      # artifacts to the draft first; flipping draft→published here is the atomic step that makes the
+      # release (and its assets) immutable. Must run only after every artifact is attached above.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
 
   docker:
     needs: approve
