@@ -136,17 +136,31 @@ func newEditForm(vm xincus.VM) (*huh.Form, *formVars) {
 	// A disk resize needs the VM stopped, so only offer the editable field then; a running
 	// VM gets an informational note instead. This is what keeps a running-VM edit from
 	// silently dropping the user's cpu/ram changes just because they also touched the disk.
-	if vm.StatusCode == api.Stopped {
-		v.disk = normalizeByteSize(vm.DiskSize)
-		v.diskSeed = v.disk // remember the seed so an untouched submit doesn't pin it as an override
-		fields = append(fields, huh.NewInput().Key("disk").Title("Disk (GiB)").
-			Description("Grow only — can't shrink. Applies on the next start.").
-			Placeholder("e.g. 20GiB").Value(&v.disk).Validate(growOnlyValidator(v.diskSeed)))
-	} else {
+	if vm.StatusCode != api.Stopped {
 		fields = append(fields, huh.NewNote().Title("Disk").
 			Description("Stop the VM to resize its root disk (grow only)."))
+		return applyEscKeymap(huh.NewForm(huh.NewGroup(fields...))), v
 	}
-	return applyEscKeymap(huh.NewForm(huh.NewGroup(fields...))), v
+	v.disk = normalizeByteSize(vm.DiskSize)
+	v.diskSeed = v.disk // remember the seed so an untouched submit doesn't pin it as an override
+	fields = append(fields, huh.NewInput().Key("disk").Title("Disk (GiB)").
+		Description("Grow only — can't shrink. Applies on the next start.").
+		Placeholder("e.g. 20GiB").Value(&v.disk).Validate(growOnlyValidator(v.diskSeed)))
+	// A confirm that echoes old → new size, shown only when the disk actually changed
+	// (a cpu/ram-only edit skips it). completeForm treats a declined confirm as a cancel.
+	confirm := huh.NewGroup(
+		huh.NewConfirm().Key("ok").
+			TitleFunc(func() string {
+				old := v.diskSeed
+				if old == "" {
+					old = "(pool default)"
+				}
+				return fmt.Sprintf("Grow %s disk %s → %s? Applies on next start; can't shrink back.",
+					vm.Name, old, diskResizeArg(v.diskSeed, v.disk))
+			}, &v.disk).
+			Affirmative("Grow").Negative("Cancel").Value(&v.confirm),
+	).WithHideFunc(func() bool { return diskResizeArg(v.diskSeed, v.disk) == "" })
+	return applyEscKeymap(huh.NewForm(huh.NewGroup(fields...), confirm)), v
 }
 
 // growOnlyValidator returns a size-field validator that also rejects a value below the

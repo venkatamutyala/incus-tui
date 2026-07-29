@@ -251,6 +251,31 @@ func TestEditFormDiskFieldGatedByState(t *testing.T) {
 	}
 }
 
+// A disk grow is gated on the confirm step: a changed disk with a declined confirm cancels
+// the whole edit; a confirmed change proceeds; a cpu/ram-only edit (unchanged disk) never
+// needs the confirm and proceeds regardless.
+func TestEditConfirmGatesDiskGrow(t *testing.T) {
+	mk := func(seed, disk string, confirm bool) model {
+		m := *testModel()
+		m.selectedName = "web"
+		m.formKind = formEdit
+		m.vars = &formVars{cpu: "2", diskSeed: seed, disk: disk, confirm: confirm}
+		return m
+	}
+	// Grew the disk but declined the confirm → whole edit cancelled (back to list, not busy).
+	if got, _ := mk("10GiB", "20GiB", false).completeForm(); got.(model).mode != modeList {
+		t.Errorf("declined disk grow: mode = %v, want modeList (cancelled)", got.(model).mode)
+	}
+	// Grew the disk and confirmed → proceeds into busy.
+	if got, _ := mk("10GiB", "20GiB", true).completeForm(); got.(model).mode != modeBusy {
+		t.Errorf("confirmed disk grow: mode = %v, want modeBusy", got.(model).mode)
+	}
+	// Disk unchanged (cpu/ram-only edit) → proceeds regardless of the confirm flag.
+	if got, _ := mk("10GiB", "10GiB", false).completeForm(); got.(model).mode != modeBusy {
+		t.Errorf("cpu/ram-only edit: mode = %v, want modeBusy (no confirm needed)", got.(model).mode)
+	}
+}
+
 // The inline grow-only validator rejects a shrink below the seeded size in-field, accepts a
 // grow or an unchanged value, and defers to format validation.
 func TestGrowOnlyValidator(t *testing.T) {

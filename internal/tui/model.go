@@ -528,13 +528,17 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 	switch kind {
 	case formEdit:
 		// The disk field is only present when the VM is stopped (newEditForm gates it), so
-		// a running-VM edit carries no disk change and its cpu/ram still apply — no need to
-		// refuse the whole form. diskResizeArg is "" unless the user actually changed it.
-		edit := xincus.ResourceEdit{
-			CPU:  vars.cpu,
-			Mem:  withUnit(vars.mem, "MiB"),
-			Disk: diskResizeArg(vars.diskSeed, vars.disk),
+		// a running-VM edit carries no disk change and its cpu/ram still apply. diskResizeArg
+		// is "" unless the user actually changed it.
+		disk := diskResizeArg(vars.diskSeed, vars.disk)
+		// When the disk is being grown, the form showed a confirm; a declined confirm cancels
+		// the whole edit (the disk is the consequential change). A cpu/ram-only edit (disk=="")
+		// never sees the confirm, so don't gate it.
+		if disk != "" && !vars.confirm {
+			m.mode = modeList
+			return m, m.setToast("edit cancelled", false)
 		}
+		edit := xincus.ResourceEdit{CPU: vars.cpu, Mem: withUnit(vars.mem, "MiB"), Disk: disk}
 		return m.busy("resize", name, func(ctx context.Context) error {
 			return m.client.SetResources(ctx, name, edit)
 		})
