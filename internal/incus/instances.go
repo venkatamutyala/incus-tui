@@ -359,16 +359,11 @@ func (c *Client) CreateVM(ctx context.Context, spec CreateSpec) error {
 		cfg["cloud-init.user-data"] = spec.CloudInitUser
 	}
 
-	src := api.InstanceSource{
-		Type:     "image",
-		Server:   ImageServerURL,
-		Protocol: ImageProtocol,
-	}
-	if spec.ImageFingerprint != "" {
-		src.Fingerprint = spec.ImageFingerprint
-	} else {
-		src.Alias = spec.ImageAlias
-	}
+	// Launch a locally-imported image (e.g. an imported codespace) straight from the local store;
+	// only reach out to the public simplestreams server for an image we don't already have. Getting
+	// this wrong makes a local image fail to launch — Incus would look for its fingerprint on the
+	// remote server, where a custom image doesn't exist.
+	src := imageSource(c.imageIsLocal(spec.ImageFingerprint, spec.ImageAlias), spec.ImageFingerprint, spec.ImageAlias)
 
 	post := api.InstancesPost{
 		Name:   spec.Name,
@@ -401,6 +396,39 @@ func (c *Client) CreateVM(ctx context.Context, spec CreateSpec) error {
 		return fmt.Errorf("creating VM %q: %w", spec.Name, err)
 	}
 	return nil
+}
+
+// imageSource builds the InstanceSource for a launch. A locally-present image (an imported
+// codespace, or a previously-cached remote image) launches straight from the local store — an empty
+// Server means "the local image store". Everything else is pulled from the public simplestreams
+// server. It is pure so the local-vs-remote decision is unit-testable without a daemon.
+func imageSource(local bool, fingerprint, alias string) api.InstanceSource {
+	src := api.InstanceSource{Type: "image"}
+	if fingerprint != "" {
+		src.Fingerprint = fingerprint
+	} else {
+		src.Alias = alias
+	}
+	if !local {
+		src.Server = ImageServerURL
+		src.Protocol = ImageProtocol
+	}
+	return src
+}
+
+// imageIsLocal reports whether the image is already in the local store (by fingerprint, or by alias
+// when no fingerprint is given). Any lookup error is treated as "not local", so the launch falls
+// back to the remote server rather than failing.
+func (c *Client) imageIsLocal(fingerprint, alias string) bool {
+	if fingerprint != "" {
+		img, _, err := c.server.GetImage(fingerprint)
+		return err == nil && img != nil
+	}
+	if alias != "" {
+		entry, _, err := c.server.GetImageAlias(alias)
+		return err == nil && entry != nil
+	}
+	return false
 }
 
 // rootDevice returns a copy of the default profile's root disk device (incl. its

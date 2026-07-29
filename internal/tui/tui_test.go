@@ -629,3 +629,22 @@ func TestImageLabelFallback(t *testing.T) {
 		t.Errorf("imageLabel(alias) = %q, want the alias", got)
 	}
 }
+
+// The launch wizard's "press I to import" breadcrumb keys off hasCodespaceImage over the wizard's
+// image list. The reported bug was that an imported codespace never reached that list (it listed
+// only remote images), so the breadcrumb showed even after a successful import. Pin the detection:
+// once a glueops-codespace-* image is in the list, the breadcrumb is suppressed; otherwise shown.
+func TestHasCodespaceImageDrivesBreadcrumb(t *testing.T) {
+	remoteOnly := []xincus.Image{{Alias: "ubuntu/24.04/cloud"}, {Alias: "debian/13/cloud"}}
+	if hasCodespaceImage(remoteOnly) {
+		t.Error("no codespace image present → breadcrumb should show (hasCodespaceImage=false)")
+	}
+	withCodespace := append([]xincus.Image{{Alias: "glueops-codespace-latest", Local: true}}, remoteOnly...)
+	if !hasCodespaceImage(withCodespace) {
+		t.Error("codespace image present → breadcrumb should be suppressed (hasCodespaceImage=true)")
+	}
+	// A per-tag alias (not just latest) must also count.
+	if !hasCodespaceImage([]xincus.Image{{Alias: "glueops-codespace-v0.153.0", Local: true}}) {
+		t.Error("a per-tag codespace alias should satisfy hasCodespaceImage")
+	}
+}

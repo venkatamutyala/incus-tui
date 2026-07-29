@@ -9,7 +9,7 @@ import (
 	"github.com/lxc/incus/v7/shared/api"
 )
 
-// Image is a flattened, UI-friendly view of a VM-capable remote image.
+// Image is a flattened, UI-friendly view of a VM-capable image the launcher can offer.
 type Image struct {
 	Fingerprint string
 	Alias       string // a display label: real alias if any, else os/release/variant
@@ -17,40 +17,38 @@ type Image struct {
 	Description string
 	Arch        string
 	SizeBytes   int64
+	Local       bool // already in the local store (e.g. an imported codespace) → launches instantly
 }
 
-// ListVMImages returns VM-capable images from the public image server that match the
-// host architecture, preferring cloud variants and sorted for stable browsing.
+// ListVMImages returns VM-capable images the launch wizard can offer for the host architecture:
+// both **locally-imported** images (e.g. a GlueOps codespace, which live in the local daemon and
+// would otherwise never appear here) and the public simplestreams catalog. Cloud variants sort
+// first; the newest build wins per product so a cached remote image isn't duplicated by its catalog
+// entry. The remote catalog is best-effort — if the image server is unreachable we still return the
+// local images, so an imported codespace stays launchable offline.
 func (c *Client) ListVMImages() ([]Image, error) {
-	is, err := c.imageServer()
-	if err != nil {
-		return nil, err
-	}
-	raw, err := is.GetImages()
-	if err != nil {
-		return nil, fmt.Errorf("listing images: %w", err)
-	}
 	host := c.hostArch() // "" if undetermined → don't filter
 
-	// The server publishes several daily-build serials per product, so the same image
-	// appears ~3× (≈242 entries collapse to ≈83 products). Group by product and keep
-	// the newest build so the launcher shows one clean row per image.
+	// The server publishes several daily-build serials per product, so the same image appears ~3×.
+	// Group by product and keep the newest build so the launcher shows one clean row per image.
 	type entry struct {
 		img     Image
 		created time.Time
 	}
 	best := map[string]*entry{}
-	for i := range raw {
-		im := &raw[i]
+	consider := func(im *api.Image, local bool) {
 		if im.Type != "virtual-machine" {
-			continue
+			return
 		}
 		if host != "" && normalizeArch(im.Architecture) != host {
-			continue // an image of another arch can't boot here
+			return // an image of another arch can't boot here
 		}
 		key := productKey(im)
+		// Newest build wins per product. A custom local image (no os/release properties, e.g. the
+		// codespace) keys by fingerprint via productKey, so it always gets its own row; a cached
+		// remote image shares its product's key and thus collapses with the catalog entry.
 		if e, ok := best[key]; ok && !im.CreatedAt.After(e.created) {
-			continue // an older or equal build of a product we've already kept
+			return
 		}
 		best[key] = &entry{
 			created: im.CreatedAt,
@@ -61,8 +59,31 @@ func (c *Client) ListVMImages() ([]Image, error) {
 				Description: im.Properties["description"],
 				Arch:        im.Architecture,
 				SizeBytes:   im.Size,
+				Local:       local,
 			},
 		}
+	}
+
+	// Local images first (so a local build wins ties against an equal-dated catalog serial).
+	if local, err := c.server.GetImages(); err == nil {
+		for i := range local {
+			consider(&local[i], true)
+		}
+	}
+
+	// Remote simplestreams catalog — best-effort so a network failure doesn't hide local images.
+	var remoteErr error
+	if is, err := c.imageServer(); err != nil {
+		remoteErr = err
+	} else if raw, err := is.GetImages(); err != nil {
+		remoteErr = fmt.Errorf("listing images: %w", err)
+	} else {
+		for i := range raw {
+			consider(&raw[i], false)
+		}
+	}
+	if len(best) == 0 && remoteErr != nil {
+		return nil, remoteErr // nothing to show and the catalog failed → surface why
 	}
 
 	out := make([]Image, 0, len(best))
@@ -70,7 +91,10 @@ func (c *Client) ListVMImages() ([]Image, error) {
 		out = append(out, e.img)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		// Cloud images first (they ship the agent), then by label.
+		// Local images first (the user explicitly imported them), then cloud, then by label.
+		if out[i].Local != out[j].Local {
+			return out[i].Local
+		}
 		if out[i].Cloud != out[j].Cloud {
 			return out[i].Cloud
 		}

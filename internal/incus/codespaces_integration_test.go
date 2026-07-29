@@ -100,6 +100,29 @@ func TestLiveCodespaceImportMechanism(t *testing.T) {
 		t.Errorf("ListLocalImages Type = %q, want virtual-machine", found.Type)
 	}
 
+	// The launch wizard (ListVMImages) must ALSO surface the imported image, marked Local — this is
+	// the bug where an imported codespace showed in the images view but the create-VM wizard said it
+	// wasn't imported (it only listed remote catalog images).
+	vmImgs, err := c.ListVMImages()
+	if err != nil {
+		t.Fatalf("ListVMImages: %v", err)
+	}
+	var inWizard *Image
+	for i := range vmImgs {
+		if vmImgs[i].Fingerprint == fp {
+			inWizard = &vmImgs[i]
+		}
+	}
+	if inWizard == nil {
+		t.Fatalf("ListVMImages did not include the imported image %.12s — it would be unlaunchable", fp)
+	}
+	if !inWizard.Local {
+		t.Errorf("imported image should be marked Local (launches from the local store, not remote)")
+	}
+	if inWizard.Alias != alias {
+		t.Errorf("wizard label = %q, want the codespace alias %q (drives the launch breadcrumb)", inWizard.Alias, alias)
+	}
+
 	// DeleteImage removes it.
 	if err := c.DeleteImage(ctx, fp); err != nil {
 		t.Fatalf("DeleteImage: %v", err)

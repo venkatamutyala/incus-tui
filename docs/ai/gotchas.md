@@ -142,6 +142,15 @@ The Incus client mirrors a guest command's stdout and stderr on **separate gorou
 - **`retargetLatest` never clobbers a user's alias.** `UpdateImageAlias` is a blind PUT, so before
   moving `glueops-codespace-latest` it checks the current target actually carries a
   `glueops-codespace-*` alias (i.e. we own it); otherwise it refuses.
+- **The launch wizard spans TWO image sources — keep list and launch in sync.** `ListVMImages`
+  merges the **local** store (`c.server.GetImages()` — imported codespaces, cached images) with the
+  **remote** simplestreams catalog; a local-only image (the codespace) would otherwise never appear,
+  which is exactly the "imported but the wizard says not-imported" bug. The launch side must match:
+  `CreateVM` calls `imageIsLocal(...)` and `imageSource(...)` sets an **empty `Server`** for a local
+  image (launch from the local store) vs the simplestreams `Server`/`Protocol` for a remote one — a
+  local image pulled with `Server: ImageServerURL` fails because its fingerprint isn't on the remote.
+  Products dedup by `productKey` (newest wins), so a custom image with no os/release properties keys
+  by fingerprint and always shows.
 - **The split-asset naming is the one brittle contract.** `codespacePartRe`
   (`\.qcow2\.tar\.part_[a-z]+$`) is the single source of truth used by both `HasImage` detection and
   the downloader. If a release has assets but none match, the importer emits "publish format may have
