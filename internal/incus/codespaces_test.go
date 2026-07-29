@@ -137,6 +137,38 @@ func TestResolveRelease(t *testing.T) {
 	}
 }
 
+// safeAssetName / toRelease must drop any asset name that isn't a plain filename, so a
+// hostile/compromised release can't smuggle a path-traversal name that later writes outside the temp
+// dir via filepath.Join(dir, name).
+func TestToReleaseRejectsUnsafeAssetNames(t *testing.T) {
+	r := ghRelease{TagName: "v1", Assets: []ghAsset{
+		{Name: "v1.qcow2.tar.part_aa", Size: 10},                // safe
+		{Name: "../../../../etc/x.qcow2.tar.part_ab", Size: 99}, // traversal → rejected
+		{Name: "sub/dir.qcow2.tar.part_ac", Size: 99},           // separator → rejected
+	}}
+	cr := toRelease(r)
+	if len(cr.parts) != 1 || cr.parts[0].Name != "v1.qcow2.tar.part_aa" {
+		t.Fatalf("toRelease kept unsafe asset names: %+v", cr.parts)
+	}
+	if !cr.HasImage || cr.SizeBytes != 10 { // only the safe part counts toward size
+		t.Errorf("HasImage/size wrong after filtering: %v/%d", cr.HasImage, cr.SizeBytes)
+	}
+}
+
+func TestSafeAssetName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"v1.qcow2.tar.part_aa": true,
+		"../x.part_aa":         false,
+		"a/b.part_aa":          false,
+		"..":                   false,
+		"":                     false,
+	} {
+		if got := safeAssetName(name); got != want {
+			t.Errorf("safeAssetName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 // isOurCodespaceAlias must treat per-tag aliases as ours but NOT the rolling `latest` — otherwise
 // the retargetLatest clobber guard would hijack a user's hand-created glueops-codespace-latest.
 func TestIsOurCodespaceAlias(t *testing.T) {

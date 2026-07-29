@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -130,13 +131,21 @@ func ghErr(resp *http.Response) error {
 func toRelease(r ghRelease) CodespaceRelease {
 	cr := CodespaceRelease{Tag: r.TagName, PublishedAt: r.PublishedAt, Prerelease: r.Prerelease}
 	for _, a := range r.Assets {
-		if codespacePartRe.MatchString(a.Name) {
+		if codespacePartRe.MatchString(a.Name) && safeAssetName(a.Name) {
 			cr.parts = append(cr.parts, a)
 			cr.SizeBytes += a.Size
 		}
 	}
 	cr.HasImage = len(cr.parts) > 0
 	return cr
+}
+
+// safeAssetName rejects an asset name that isn't a plain filename, so a hostile/compromised release
+// (or a rogue INCUS_TUI_CODESPACES_REPO) can't smuggle a path-traversal name that later lands the
+// downloaded bytes outside the temp dir via filepath.Join(dir, name). The name is used both as the
+// on-disk filename and to order the parts, so it must be exactly its own base with no separators.
+func safeAssetName(name string) bool {
+	return name != "" && name == filepath.Base(name) && !strings.Contains(name, "..")
 }
 
 // ListCodespaceReleases returns the newest ~30 non-draft releases (newest first), each marked

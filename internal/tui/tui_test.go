@@ -386,6 +386,22 @@ func TestFrameAlwaysExactlyFillsScreen(t *testing.T) {
 		overtall.form = of.WithWidth(formWidth(w)).WithHeight(h * 4)
 		_ = overtall.form.Init()
 		assertFrame(t, overtall, "overtallForm")
+
+		// The new images view — empty, and populated (incl. a long alias that must be clipped, not
+		// wrapped) — must hold the same exact-height / no-overflow invariant as every other mode.
+		imgsEmpty := base()
+		imgsEmpty.mode = modeImages
+		imgsEmpty.layout()
+		assertFrame(t, imgsEmpty, "images-empty")
+
+		imgsFull := base()
+		imgsFull.mode = modeImages
+		imgsFull.images = []xincus.LocalImage{
+			{Fingerprint: "abcdef0123456789", Aliases: []string{"glueops-codespace-v0.153.0-a-very-long-alias-that-exceeds-the-column"}, Type: "virtual-machine", Size: 5 << 30},
+			{Fingerprint: "0011223344556677", Type: "container", Size: 400 << 20},
+		}
+		imgsFull.layout()
+		assertFrame(t, imgsFull, "images-populated")
 	}
 }
 
@@ -479,13 +495,64 @@ func TestLaunchDefaultDiskIs50(t *testing.T) {
 	}
 }
 
-// The import picker defaults to (and preselects) "latest".
-func TestImportFormDefaultsToLatest(t *testing.T) {
+// The import picker preselects "latest", which resolves to the NEWEST importable tag (releases are
+// passed newest-first) — not the literal "latest", so the default can't dead-end on an image-less
+// newest release. With no releases it falls back to the literal "latest".
+func TestImportFormDefaultsToNewestImportable(t *testing.T) {
 	v := &formVars{}
-	rels := []xincus.CodespaceRelease{{Tag: "v2", HasImage: true}}
+	rels := []xincus.CodespaceRelease{{Tag: "v2", HasImage: true}, {Tag: "v1", HasImage: true}}
 	_ = newImportForm(rels, nil, v)
-	if v.tag != "latest" {
-		t.Errorf("import form default tag = %q, want latest", v.tag)
+	if v.tag != "v2" {
+		t.Errorf("import form default tag = %q, want v2 (newest importable)", v.tag)
+	}
+	v2 := &formVars{}
+	_ = newImportForm(nil, nil, v2)
+	if v2.tag != "latest" {
+		t.Errorf("empty-release default tag = %q, want the literal latest fallback", v2.tag)
+	}
+}
+
+// progressEmit is the pure throttle/coalesce policy: a phase change always sends AND blocks (so the
+// cap-1 channel can't coalesce the once-only phase event away); a same-phase byte update within
+// 200ms is dropped; a later same-phase update sends non-blocking.
+func TestProgressEmit(t *testing.T) {
+	// Phase change → send + block, regardless of how recently we emitted.
+	if send, block := progressEmit("download", 5*time.Millisecond, xincus.ImportProgress{Phase: "assemble"}); !send || !block {
+		t.Errorf("phase change: send=%v block=%v, want true/true", send, block)
+	}
+	// Same phase, within the throttle window → dropped.
+	if send, _ := progressEmit("download", 50*time.Millisecond, xincus.ImportProgress{Phase: "download"}); send {
+		t.Error("same-phase update within 200ms should be throttled (not sent)")
+	}
+	// Same phase, past the window → sent non-blocking (coalesce).
+	if send, block := progressEmit("download", 300*time.Millisecond, xincus.ImportProgress{Phase: "download"}); !send || block {
+		t.Errorf("same-phase update past 200ms: send=%v block=%v, want true/false", send, block)
+	}
+	// First-ever update ("" → "resolve") is a phase change → send + block.
+	if send, block := progressEmit("", 0, xincus.ImportProgress{Phase: "resolve"}); !send || !block {
+		t.Errorf("first update: send=%v block=%v, want true/true", send, block)
+	}
+}
+
+// quit() must cancel any in-flight op so its ctx-tied read loops unwind and temp cleanup runs, and
+// must not double-close eventsDone on a second call.
+func TestQuitCancelsInFlightOp(t *testing.T) {
+	m := *testModel()
+	m.eventsDone = make(chan struct{})
+	canceled := 0
+	m.cancel = func() { canceled++ }
+
+	mm, _ := m.quit()
+	m2 := mm.(model)
+	if canceled != 1 {
+		t.Errorf("quit cancelled the in-flight op %d times, want 1", canceled)
+	}
+	if !m2.quitting {
+		t.Error("quit did not set quitting")
+	}
+	// A second quit must be a no-op (no panic from re-closing eventsDone, no extra cancel).
+	if _, _ = m2.quit(); canceled != 1 {
+		t.Errorf("second quit cancelled again (%d) — should be guarded by quitting", canceled)
 	}
 }
 

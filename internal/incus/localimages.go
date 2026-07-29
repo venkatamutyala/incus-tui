@@ -92,7 +92,7 @@ func (c *Client) checkPoolSpace(ctx context.Context, need int64) error {
 	}
 	free := int64(res.Space.Total) - int64(res.Space.Used)
 	if res.Space.Total > 0 && free < need {
-		return fmt.Errorf("storage pool %q has ~%d GB free; need ~%d GB — delete some images/VMs first", pool, free>>30, need>>30)
+		return fmt.Errorf("storage pool %q has ~%d GiB free; need ~%d GiB — delete some images/VMs first", pool, free>>30, need>>30)
 	}
 	return nil
 }

@@ -260,16 +260,12 @@ func (c *Client) createVMImage(ctx context.Context, qcowPath string, rel Codespa
 		RootfsName: "rootfs.qcow2",
 	})
 	if err != nil {
-		// An "already exists" here means the image blob is present but its alias was missing (the
-		// alias-gate keyed on the alias, so we got this far). Point the user at the fix rather than
-		// failing cryptically — the deterministic fingerprint makes the orphan unusable otherwise.
-		if isAlreadyExists(err) {
-			return "", fmt.Errorf("this codespace image is already in the store but has no alias — delete it in the images view (press i), then re-import: %w", err)
-		}
-		return "", fmt.Errorf("creating image: %w", err)
+		return "", createImageErr(err)
 	}
+	// For a multipart VM image the duplicate-fingerprint check runs server-side, so an
+	// already-imported-but-aliasless blob surfaces HERE (from the operation), not from CreateImage.
 	if err := waitOp(ctx, op); err != nil {
-		return "", fmt.Errorf("creating image: %w", err)
+		return "", createImageErr(err)
 	}
 	fp, _ := op.Get().Metadata["fingerprint"].(string)
 	if fp == "" {
@@ -303,6 +299,18 @@ func buildMetadata(rel CodespaceRelease) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// createImageErr maps a CreateImage/waitOp failure to a user-facing error. An "already exists" means
+// the image blob is present but its alias was missing (the alias-gate keyed on the alias, so we got
+// this far) — point the user at the fix rather than failing cryptically, since the deterministic
+// fingerprint makes the orphan otherwise un-importable. This can surface from either the synchronous
+// CreateImage return or, for a multipart VM image, from the background operation.
+func createImageErr(err error) error {
+	if isAlreadyExists(err) {
+		return fmt.Errorf("this codespace image is already in the store but has no alias — delete it in the images view (press i), then re-import: %w", err)
+	}
+	return fmt.Errorf("creating image: %w", err)
 }
 
 // imageFingerprintByAlias returns the image fingerprint an alias points at, and whether the alias
@@ -426,7 +434,7 @@ func checkTempSpace(dir string, need int64) error {
 	}
 	avail := int64(st.Bavail) * st.Bsize
 	if avail < need {
-		return fmt.Errorf("not enough temp space in %s: need ~%d GB, have ~%d GB", os.TempDir(), need>>30, avail>>30)
+		return fmt.Errorf("not enough temp space in %s: need ~%d GiB, have ~%d GiB", os.TempDir(), need>>30, avail>>30)
 	}
 	return nil
 }

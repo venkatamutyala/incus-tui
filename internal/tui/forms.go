@@ -249,8 +249,17 @@ func newDeleteForm(vm xincus.VM) (*huh.Form, *formVars) {
 // pinned and preselected, each explicit tag labeled with its date + download size (and a ✓ marker
 // when that tag is already in the local store), then a confirm. imported keys off the per-tag alias.
 func newImportForm(releases []xincus.CodespaceRelease, imported map[string]bool, v *formVars) *huh.Form {
+	// Resolve the "latest" shortcut to the newest release that actually HAS an image (releases is
+	// pre-filtered to importable, newest-first). Using GitHub's literal /releases/latest here would
+	// bypass that guard and could dead-end on an image-less newest release — the one path where the
+	// picker can't pre-validate. Fall back to the literal "latest" only if the list is somehow empty.
+	latestTag, latestLabel := "latest", "latest (newest stable release)"
+	if len(releases) > 0 {
+		latestTag = releases[0].Tag
+		latestLabel = fmt.Sprintf("latest → %s (newest with an image)", releases[0].Tag)
+	}
 	opts := make([]huh.Option[string], 0, len(releases)+1)
-	opts = append(opts, huh.NewOption("latest (newest stable release)", "latest"))
+	opts = append(opts, huh.NewOption(latestLabel, latestTag))
 	for _, r := range releases {
 		label := fmt.Sprintf("%-16s %s · %s", r.Tag, r.PublishedAt.Format("2006-01-02"), formatBytes(r.SizeBytes))
 		if imported[r.Tag] {
@@ -258,7 +267,7 @@ func newImportForm(releases []xincus.CodespaceRelease, imported map[string]bool,
 		}
 		opts = append(opts, huh.NewOption(label, r.Tag))
 	}
-	v.tag = "latest"
+	v.tag = latestTag
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().Key("tag").Title("GlueOps Codespace release").

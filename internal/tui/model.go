@@ -571,9 +571,19 @@ func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) cancelForm() model {
-	m.mode = modeList
+	// Return to wherever the form was opened from. The delete-image confirm is reachable only from
+	// the images view, so esc must land back there — matching the huh "Cancel" button path in
+	// completeForm; otherwise esc would eject the user to the VM list mid image-management.
+	back := modeList
+	if m.formKind == formDeleteImage {
+		back = modeImages
+	}
+	m.mode = back
 	m.form = nil
 	m.formKind = formNone
+	if back == modeImages {
+		m.layout()
+	}
 	return m
 }
 
@@ -817,18 +827,16 @@ func (m model) busyProgress(action, name string, fn func(context.Context, func(x
 	var lastEmit time.Time
 	lastPhase := ""
 	onProgress := func(p xincus.ImportProgress) {
-		// Throttle the high-frequency byte updates so we don't re-render the whole frame on every
-		// 1 MB read; but let phase changes through immediately.
 		now := time.Now()
-		phaseChanged := p.Phase != lastPhase
-		if !phaseChanged && now.Sub(lastEmit) < 200*time.Millisecond {
+		send, block := progressEmit(lastPhase, now.Sub(lastEmit), p)
+		if !send {
 			return
 		}
 		lastEmit, lastPhase = now, p.Phase
-		if phaseChanged {
-			// A phase (resolve→download→assemble→import) emits exactly once, so drop-coalescing
-			// could lose it and freeze the status line on the previous phase. Block until the
-			// listener drains (fast — cap-1) or the op is cancelled. Runs on the producer goroutine.
+		if block {
+			// A phase change emits exactly once — block until the listener drains (fast, cap-1) or
+			// the op is cancelled, so coalescing can't lose it and freeze the status line. Runs on
+			// the producer goroutine.
 			select {
 			case progCh <- p:
 			case <-ctx.Done():
@@ -846,6 +854,21 @@ func (m model) busyProgress(action, name string, fn func(context.Context, func(x
 		return opDoneMsg{action: action, name: name, err: fn(ctx, onProgress)}
 	}
 	return m, tea.Batch(run, listenProgress(progCh))
+}
+
+// progressEmit is the pure throttle/coalesce policy for import progress updates: a phase change
+// (which the service emits exactly once) must always be sent and must BLOCK so the cap-1 channel
+// can't coalesce it away; a same-phase byte update within 200 ms of the last emit is dropped
+// (throttle); otherwise it is sent non-blocking (coalesce). Extracted so the policy is unit-testable
+// without goroutines — the send mechanics stay in busyProgress.
+func progressEmit(prevPhase string, sinceLast time.Duration, p xincus.ImportProgress) (send, block bool) {
+	if p.Phase != prevPhase {
+		return true, true
+	}
+	if sinceLast < 200*time.Millisecond {
+		return false, false
+	}
+	return true, false
 }
 
 // currentImage returns the local image under the images-table cursor.
