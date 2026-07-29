@@ -392,6 +392,7 @@ func TestFrameAlwaysExactlyFillsScreen(t *testing.T) {
 func testModel() *model {
 	m := &model{width: 100}
 	m.table = table.New()
+	m.imgTable = table.New()
 	m.filterInput = textinput.New()
 	m.editor = textarea.New()
 	return m
@@ -460,5 +461,104 @@ func TestApplyFilterSelectionFallback(t *testing.T) {
 	cur := m.table.Cursor()
 	if cur < 0 || cur >= len(m.filtered) {
 		t.Fatalf("cursor %d out of range after VM removal (would target a wrong VM)", cur)
+	}
+}
+
+// --- codespace import + images view -----------------------------------------
+
+// The launch wizard's default disk must be 50 GiB (the roomy default that also clears the
+// ~20 GiB codespace image floor). Driving the launchDataMsg handler pins the actual default,
+// which TestLaunchSpecMapping (it sets disk explicitly) does not cover.
+func TestLaunchDefaultDiskIs50(t *testing.T) {
+	m := *testModel()
+	m.mode = modeBusy // the handler ignores the msg unless a launch is in flight
+	out, _ := m.Update(launchDataMsg{})
+	got := out.(model)
+	if got.vars == nil || got.vars.disk != "50" {
+		t.Fatalf("launch default disk = %v, want 50", got.vars)
+	}
+}
+
+// The import picker defaults to (and preselects) "latest".
+func TestImportFormDefaultsToLatest(t *testing.T) {
+	v := &formVars{}
+	rels := []xincus.CodespaceRelease{{Tag: "v2", HasImage: true}}
+	_ = newImportForm(rels, nil, v)
+	if v.tag != "latest" {
+		t.Errorf("import form default tag = %q, want latest", v.tag)
+	}
+}
+
+// importableReleases keeps only releases that actually carry an image.
+func TestImportableReleases(t *testing.T) {
+	in := []xincus.CodespaceRelease{
+		{Tag: "v2", HasImage: true}, {Tag: "notes", HasImage: false}, {Tag: "v1", HasImage: true},
+	}
+	out := importableReleases(in)
+	if len(out) != 2 || out[0].Tag != "v2" || out[1].Tag != "v1" {
+		t.Fatalf("importableReleases = %+v, want v2,v1", out)
+	}
+}
+
+// importedTags maps per-tag codespace aliases back to their tag (for the ✓ marker), ignoring
+// unrelated aliases and the rolling latest.
+func TestImportedTags(t *testing.T) {
+	m := testModel()
+	m.images = []xincus.LocalImage{
+		{Aliases: []string{"glueops-codespace-v2"}},
+		{Aliases: []string{"some-other-image"}},
+		{Aliases: []string{"glueops-codespace-latest"}},
+	}
+	got := m.importedTags()
+	if !got["v2"] || !got["latest"] || got["some-other-image"] {
+		t.Fatalf("importedTags = %+v, want v2+latest only", got)
+	}
+}
+
+// importStatusLine renders phase/step + (download) percent/bytes + a live elapsed timer, and
+// stays a single line (frameView clamps width; it must never inject a newline).
+func TestImportStatusLine(t *testing.T) {
+	m := *testModel()
+	m.busyText, m.busyStart = "import glueops-codespace-latest", time.Now().Add(-3*time.Second)
+
+	m.busyProg = xincus.ImportProgress{Phase: "download", Step: 2, Done: 1 << 30, Total: 2 << 30}
+	dl := m.importStatusLine()
+	if strings.Contains(dl, "\n") {
+		t.Fatalf("status line must be single-line, got %q", dl)
+	}
+	for _, want := range []string{"step 2/4", "download", "50%"} {
+		if !strings.Contains(dl, want) {
+			t.Errorf("download status %q missing %q", dl, want)
+		}
+	}
+
+	// Opaque phase: no percent, still shows the phase + elapsed.
+	m.busyProg = xincus.ImportProgress{Phase: "import", Step: 4}
+	im := m.importStatusLine()
+	if !strings.Contains(im, "step 4/4") || strings.Contains(im, "%") {
+		t.Errorf("import-phase status %q should show step 4/4 and no percent", im)
+	}
+}
+
+// syncImages must not panic when the column set is rebuilt on a width change (same class of
+// bug as the VM table's SetColumns-on-shrink crash).
+func TestSyncImagesResizeNoPanic(t *testing.T) {
+	m := testModel()
+	m.images = []xincus.LocalImage{
+		{Fingerprint: "abcdef0123456789", Aliases: []string{"glueops-codespace-latest"}, Type: "virtual-machine", Size: 1 << 30},
+	}
+	m.width = 200
+	m.syncImages()
+	m.width = 30 // shrink — a naive SetColumns would panic here
+	m.syncImages()
+}
+
+// A local image with no alias falls back to a short fingerprint label (never an empty cell).
+func TestImageLabelFallback(t *testing.T) {
+	if got := imageLabel(xincus.LocalImage{Fingerprint: "abcdef0123456789"}); got != "abcdef012345" {
+		t.Errorf("imageLabel(no alias) = %q, want abcdef012345", got)
+	}
+	if got := imageLabel(xincus.LocalImage{Aliases: []string{"glueops-codespace-v2"}}); got != "glueops-codespace-v2" {
+		t.Errorf("imageLabel(alias) = %q, want the alias", got)
 	}
 }

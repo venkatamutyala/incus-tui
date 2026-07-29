@@ -44,6 +44,13 @@ One live screen to watch your VMs, act on them with single keystrokes, shell in,
 - **Launch wizard** (`n`) — browse VM-capable images (filtered to your host architecture),
   set size, pick a **cloud-init template**, edit it inline (validated), and launch. Templates
   live in `~/.config/incus-tui/templates` (seeded with starters).
+- **Import GlueOps Codespace** (`I`) — pull the codespace VM image straight from
+  [github.com/glueops/codespaces](https://github.com/glueops/codespaces) Releases: pick **latest
+  or a specific tag**, watch **live download/import progress**, and it lands in the launch wizard.
+  Re-importing a tag is a no-op (idempotent). The image is **x86_64-only** (Apple-Silicon/arm64
+  hosts can't run it — the picker says so up front).
+- **Images view** (`i`) — list local images (alias · type · size · created) and **delete** (`d`)
+  ones you no longer need; the daemon refuses to delete an image still in use by a VM.
 - **Fuzzy filter** (`/`), responsive columns, contextual help bar, and a full cheat sheet (`?`).
 
 The TUI is **storage-agnostic** — it manages whatever Incus is configured with and resolves the
@@ -60,6 +67,7 @@ launch disk pool from your default profile.
 | `/` | fuzzy filter | `f` | pause / resume |
 | `?` | full help | `p` | snapshots (create/restore/delete) |
 | `R` | refresh | `e` `y` `d` | edit cpu·ram·disk / copy IP / delete |
+| `I` | import GlueOps codespace | `i` | images (list / delete) |
 
 In the launch wizard, `ctrl+s` launches from the cloud-init editor and `esc` steps back.
 During a long operation, `esc` cancels it.

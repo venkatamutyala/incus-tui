@@ -41,6 +41,8 @@ func (m model) frameView() string {
 			body = m.detail.View()
 		case modeLogs:
 			body = m.logs.View()
+		case modeImages:
+			body = m.imagesBody()
 		default: // modeList, modeBusy
 			body = m.listBody()
 		}
@@ -87,6 +89,13 @@ func (m model) listBody() string {
 	return m.table.View()
 }
 
+func (m model) imagesBody() string {
+	if len(m.images) == 0 {
+		return "\n  " + m.styles.dim.Render("No local images. Press I to import a GlueOps codespace.")
+	}
+	return m.imgTable.View()
+}
+
 func (m model) headerLine() string {
 	title := m.styles.title.Render("incus-tui")
 	ctx := "local · VMs"
@@ -95,6 +104,8 @@ func (m model) headerLine() string {
 		ctx = "VM · " + m.selectedName
 	case modeLogs:
 		ctx = "logs · " + m.selectedName
+	case modeImages:
+		ctx = "images"
 	case modeForm:
 		ctx = "launch / action"
 	case modeLaunchEdit:
@@ -107,7 +118,11 @@ func (m model) statusLine() string {
 	var left string
 	switch {
 	case m.mode == modeBusy:
-		left = m.spinner.View() + " " + m.busyText + m.styles.dim.Render("  (esc cancels)")
+		txt := m.busyText
+		if m.importing {
+			txt = m.importStatusLine()
+		}
+		left = m.spinner.View() + " " + txt + m.styles.dim.Render("  (esc cancels)")
 	case m.filtering:
 		left = "/" + m.filterInput.View()
 	default:
@@ -143,10 +158,12 @@ func (m model) bottomBar() string {
 		return m.styles.help.Render("esc cancel · tab/enter next")
 	case modeLaunchEdit:
 		return m.styles.help.Render("esc back to options · ctrl+s launch")
+	case modeImages:
+		return m.styles.help.Render("esc back · d delete · I import · R refresh · ↑/↓ scroll")
 	case modeDetail:
 		// esc-first so the escape hatch survives the renderer's right-edge clip on a
 		// narrow terminal.
-		return m.styles.help.Render("esc back · e edit cpu/ram/disk · p snapshot · l logs · y copy IP · s shell · d delete")
+		return m.styles.help.Render("esc back · e edit cpu/ram/disk · p snapshot · l logs · y copy IP · i images · s shell · d delete")
 	case modeLogs:
 		view := "console"
 		if m.logsShowCloudInit {
@@ -162,6 +179,28 @@ func (m model) bottomBar() string {
 		// of the frame (status line) on a short terminal.
 		return clampLines(m.help.View(m.keys), m.helpRows())
 	}
+}
+
+// importStatusLine renders the single-line codespace-import progress: label · step N/4 · phase,
+// plus percent + bytes during the download phase, and a live elapsed timer throughout. frameView's
+// MaxWidth clamp truncates it on a narrow terminal (leftmost = highest priority), so it never wraps.
+func (m model) importStatusLine() string {
+	p := m.busyProg
+	step := p.Step
+	if step < 1 {
+		step = 1
+	}
+	phase := p.Phase
+	if phase == "" {
+		phase = "starting"
+	}
+	parts := []string{fmt.Sprintf("%s · step %d/4 · %s", m.busyText, step, phase)}
+	if p.Phase == "download" && p.Total > 0 {
+		pct := int(p.Done * 100 / p.Total)
+		parts = append(parts, fmt.Sprintf("%d%% · %s/%s", pct, formatBytes(p.Done), formatBytes(p.Total)))
+	}
+	parts = append(parts, time.Since(m.busyStart).Round(time.Second).String())
+	return strings.Join(parts, " · ")
 }
 
 // clampLines keeps at most n leading lines so a rendered block can't exceed its budget.

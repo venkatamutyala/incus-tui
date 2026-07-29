@@ -35,6 +35,8 @@ const (
 	formEdit
 	formSnapManage
 	formDelete
+	formImport      // pick a GlueOps codespace release to import
+	formDeleteImage // confirm deleting a local image
 )
 
 // formVars holds form-bound values on the heap so huh's pointer bindings stay valid
@@ -46,6 +48,7 @@ type formVars struct {
 	disk    string
 	imageFP string
 	cloud   string
+	tag     string // import form: the release tag to import ("latest" or an explicit tag)
 	action  string // snapshot manager: "create" | "restore:<snap>" | "delete:<snap>"
 	confirm bool
 
@@ -89,6 +92,12 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 	if !mixed && arch != "" {
 		imgTitle = "Image · " + arch + " (type to filter)"
 	}
+	// Discovery breadcrumb: when no GlueOps codespace image is present, point at the importer
+	// right where a user would look for it (rather than a separate empty-state screen).
+	imgDesc := "cloud images ship the guest agent (needed for shell, IP, cloud-init)"
+	if !hasCodespaceImage(images) {
+		imgDesc = "no GlueOps codespace image yet — esc, then press I to import one · " + imgDesc
+	}
 
 	known := map[string]bool{"": true}
 	tmplOpts := []huh.Option[string]{huh.NewOption("(blank)", "")}
@@ -106,13 +115,13 @@ func newLaunchForm(images []xincus.Image, templates []xincus.Template, v *formVa
 			huh.NewInput().Key("name").Title("VM name").
 				Value(&v.name).Validate(uniqueVMName(names)),
 			huh.NewSelect[string]().Key("image").Title(imgTitle).
-				Description("cloud images ship the guest agent (needed for shell, IP, cloud-init)").
+				Description(imgDesc).
 				Options(imgOpts...).Value(&v.imageFP).Filtering(true).Height(10),
 		),
 		huh.NewGroup(
 			huh.NewInput().Key("cpu").Title("vCPUs").Placeholder("2").Value(&v.cpu).Validate(validateCPU),
 			huh.NewInput().Key("mem").Title("Memory (MiB)").Placeholder("2048").Value(&v.mem).Validate(validateSize),
-			huh.NewInput().Key("disk").Title("Disk (GiB)").Placeholder("12").Value(&v.disk).Validate(validateSize),
+			huh.NewInput().Key("disk").Title("Disk (GiB)").Placeholder("50").Value(&v.disk).Validate(validateSize),
 		),
 		huh.NewGroup(
 			huh.NewSelect[string]().Key("tmpl").
@@ -234,6 +243,69 @@ func newDeleteForm(vm xincus.VM) (*huh.Form, *formVars) {
 			Affirmative("Delete").Negative("Cancel").Value(&v.confirm),
 	))
 	return applyEscKeymap(form), v
+}
+
+// newImportForm builds the GlueOps codespace release picker: a filterable Select with "latest"
+// pinned and preselected, each explicit tag labeled with its date + download size (and a ✓ marker
+// when that tag is already in the local store), then a confirm. imported keys off the per-tag alias.
+func newImportForm(releases []xincus.CodespaceRelease, imported map[string]bool, v *formVars) *huh.Form {
+	opts := make([]huh.Option[string], 0, len(releases)+1)
+	opts = append(opts, huh.NewOption("latest (newest stable release)", "latest"))
+	for _, r := range releases {
+		label := fmt.Sprintf("%-16s %s · %s", r.Tag, r.PublishedAt.Format("2006-01-02"), formatBytes(r.SizeBytes))
+		if imported[r.Tag] {
+			label += "  ✓ imported"
+		}
+		opts = append(opts, huh.NewOption(label, r.Tag))
+	}
+	v.tag = "latest"
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().Key("tag").Title("GlueOps Codespace release").
+				Description("import from github.com/glueops/codespaces").
+				Options(opts...).Value(&v.tag).Filtering(true).Height(12),
+		),
+		huh.NewGroup(
+			huh.NewConfirm().Key("ok").
+				TitleFunc(func() string {
+					return fmt.Sprintf("Import %q? Downloads the VM image and adds it to Incus (this can take a few minutes).", v.tag)
+				}, &v.tag).
+				Affirmative("Import").Negative("Cancel").Value(&v.confirm),
+		),
+	)
+	return applyEscKeymap(form)
+}
+
+// newDeleteImageForm confirms deleting one local image, naming it and the space reclaimed. The
+// daemon refuses an in-use image (refcount) — we never force — so no state check is needed here.
+func newDeleteImageForm(img xincus.LocalImage) (*huh.Form, *formVars) {
+	v := &formVars{}
+	title := fmt.Sprintf("Delete image %s (%s)? Frees %s. Refused while a VM still uses it.",
+		imageLabel(img), img.Type, formatBytes(img.Size))
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().Key("ok").Title(title).
+			Affirmative("Delete").Negative("Cancel").Value(&v.confirm),
+	))
+	return applyEscKeymap(form), v
+}
+
+// imageLabel is a stable display name for a local image: its first alias, else a short fingerprint.
+func imageLabel(img xincus.LocalImage) string {
+	if len(img.Aliases) > 0 {
+		return img.Aliases[0]
+	}
+	return img.Fingerprint[:min(12, len(img.Fingerprint))]
+}
+
+// hasCodespaceImage reports whether any local image carries a glueops-codespace-* alias, used to
+// decide whether the launch wizard shows the "press I to import" breadcrumb.
+func hasCodespaceImage(images []xincus.Image) bool {
+	for _, im := range images {
+		if strings.HasPrefix(im.Alias, "glueops-codespace-") {
+			return true
+		}
+	}
+	return false
 }
 
 // --- validators --------------------------------------------------------------

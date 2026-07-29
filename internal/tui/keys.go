@@ -27,6 +27,10 @@ type keyMap struct {
 	EditLimits key.Binding
 	CopyIP     key.Binding
 	Delete     key.Binding
+
+	// Host-scoped (not tied to a VM).
+	Import key.Binding // import a GlueOps codespace image
+	Images key.Binding // open the local image list
 }
 
 // ShortHelp is the always-visible help bar. Discoverability keys come first so the
@@ -44,6 +48,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Top, k.Bottom},
 		{k.Launch, k.Shell, k.Logs, k.Start, k.Stop, k.Restart},
 		{k.Freeze, k.Snapshot, k.EditLimits, k.CopyIP, k.Delete},
+		{k.Images, k.Import},
 	}
 }
 
@@ -71,5 +76,8 @@ func defaultKeys() keyMap {
 		EditLimits: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit cpu/ram/disk")),
 		CopyIP:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy IP")),
 		Delete:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
+
+		Import: key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "import GlueOps codespace image")),
+		Images: key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "images")),
 	}
 }

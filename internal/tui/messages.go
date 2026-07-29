@@ -55,6 +55,24 @@ type tickMsg time.Time
 
 type execDoneMsg struct{ err error }
 
+type codespaceReleasesMsg struct {
+	releases []xincus.CodespaceRelease
+	err      error
+}
+
+type imagesMsg struct {
+	images []xincus.LocalImage
+	err    error
+}
+
+// busyProgressMsg is an interim progress update during a long busyProgress op (the codespace
+// import). It carries the source channel so the Update loop can re-arm the listener. The terminal
+// signal is still opDoneMsg; this only refreshes the status line.
+type busyProgressMsg struct {
+	p  xincus.ImportProgress
+	ch <-chan xincus.ImportProgress
+}
+
 // --- commands ---------------------------------------------------------------
 
 func loadVMs(c *xincus.Client) tea.Cmd {
@@ -83,6 +101,37 @@ func waitForEvent(ch <-chan xincus.Event) tea.Cmd {
 			return nil
 		}
 		return eventMsg{ev: ev}
+	}
+}
+
+func loadReleases(c *xincus.Client) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		rels, err := c.ListCodespaceReleases(ctx)
+		return codespaceReleasesMsg{releases: rels, err: err}
+	}
+}
+
+func loadImages(c *xincus.Client) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		imgs, err := c.ListLocalImages(ctx)
+		return imagesMsg{images: imgs, err: err}
+	}
+}
+
+// listenProgress reads exactly one progress update from the op's channel; the Update loop
+// re-issues it while the channel is open. When the op closes the channel it returns nil (the
+// terminal opDoneMsg comes from the op goroutine, not here).
+func listenProgress(ch <-chan xincus.ImportProgress) tea.Cmd {
+	return func() tea.Msg {
+		p, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return busyProgressMsg{p: p, ch: ch}
 	}
 }
 
