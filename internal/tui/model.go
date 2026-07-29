@@ -217,7 +217,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		vars := &formVars{cpu: "2", mem: "2048", disk: "12"}
 		m.vars, m.formKind = vars, formLaunch
 		m.form = newLaunchForm(msg.images, msg.templates, vars, vmNames(m.vms)).
-			WithWidth(formWidth(m.width)).WithHeight(max(12, m.height-5))
+			WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
 		m.mode = modeForm
 		return m, m.form.Init()
 
@@ -504,7 +504,7 @@ func (m model) openForm(kind formKind) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.formKind, m.vars, m.selectedName = kind, vars, v.Name
-	m.form = form.WithWidth(formWidth(m.width)).WithHeight(max(8, m.height-5))
+	m.form = form.WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
 	m.mode = modeForm
 	return m, m.form.Init()
 }
@@ -516,7 +516,7 @@ func (m model) openSnapshotManager() (tea.Model, tea.Cmd) {
 	}
 	form, vars := newSnapManageForm(v)
 	m.formKind, m.vars, m.selectedName = formSnapManage, vars, v.Name
-	m.form = form.WithWidth(formWidth(m.width)).WithHeight(max(8, m.height-5))
+	m.form = form.WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
 	m.mode = modeForm
 	return m, m.form.Init()
 }
@@ -566,7 +566,7 @@ func (m model) completeForm() (tea.Model, tea.Cmd) {
 		}
 		m.editor.SetValue(content)
 		m.editor.SetWidth(min(m.width, max(20, m.width-4)))
-		m.editor.SetHeight(max(6, m.height-8))
+		m.editor.SetHeight(max(6, m.height-3))
 		m.mode = modeLaunchEdit
 		return m, m.editor.Focus()
 	}
@@ -612,7 +612,7 @@ func (m model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vars.cloud = m.editor.Value()
 			m.formKind = formLaunch
 			m.form = newLaunchForm(m.launchImages, m.launchTemplates, m.vars, vmNames(m.vms)).
-				WithWidth(formWidth(m.width)).WithHeight(max(12, m.height-5))
+				WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
 			m.mode = modeForm
 			return m, m.form.Init()
 		case "ctrl+s":
@@ -777,6 +777,15 @@ func formWidth(termW int) int {
 	return max(20, termW-4)
 }
 
+// formHeight budgets a huh form's height so its bordered box, huh's footer line, and a 1–2
+// line inline validation error all fit inside the body region (bodyH = termH-2-helpRows,
+// with helpRows==1 in form mode) without pushing the status/help bars off-screen. The box
+// adds 2 rows and huh a +1 footer, so termH-8 leaves ~2 rows of headroom for an error.
+// frameView() also hard-pins the body, so this only needs to be close, not exact.
+func formHeight(termH int) int {
+	return max(8, termH-8)
+}
+
 func (m *model) setLogsContent(content string, err error, empty string) {
 	// Stay pinned to the tail across a refresh, but don't yank a reader who scrolled up.
 	atBottom := m.logs.AtBottom()
@@ -906,9 +915,9 @@ func (m *model) layout() {
 
 	m.filterInput.SetWidth(max(10, m.width-12))
 	m.editor.SetWidth(min(m.width, max(20, m.width-4)))
-	m.editor.SetHeight(max(6, m.height-8))
+	m.editor.SetHeight(max(6, m.height-3))
 
 	if m.form != nil {
-		m.form = m.form.WithWidth(formWidth(m.width)).WithHeight(max(8, m.height-5))
+		m.form = m.form.WithWidth(formWidth(m.width)).WithHeight(formHeight(m.height))
 	}
 }

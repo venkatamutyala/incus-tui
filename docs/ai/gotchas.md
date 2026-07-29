@@ -12,7 +12,14 @@ each was found by a review or a live test, not by `go build`.
   `cmd := m.method(); return m, cmd`.
 - The AltScreen renderer **CLIPS** overflow — horizontal off the right edge, vertical off the bottom.
   It does **not** wrap. A too-wide line silently loses its right side; an extra row clips the
-  help/status bar off the bottom. Keep the rendered frame at exactly `m.height`.
+  help/status bar off the bottom. The frame must be **exactly `m.height` rows by `m.width` cols** —
+  and just as bad, a frame that is *too short* leaves the previous (taller) frame's bottom rows on
+  screen as **garbled leftover text** (the AltScreen / tmux don't clear cells you didn't repaint).
+  `frameView()` (view.go) enforces this: it pins the body to `bodyH` and then clamps the whole frame
+  to `m.height × m.width`. **huh forms render a variable height** (their content height, which *grows*
+  when an inline validation error appears), so a form/editor body **must** go through that pin — never
+  emit a form frame whose height you assume is fixed. `formHeight()` budgets the form to leave room
+  for the box border + huh's footer + a 1–2 line error inside `bodyH`. Regression: `TestFrameAlwaysExactlyFillsScreen`.
 
 ## Tables (bubbles `table`)
 

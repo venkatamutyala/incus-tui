@@ -12,6 +12,19 @@ import (
 )
 
 func (m model) View() tea.View {
+	v := tea.NewView(m.frameView())
+	v.AltScreen = true
+	return v
+}
+
+// frameView composes the full-screen frame. It is a plain string (not a tea.View) so it can
+// be measured in tests. The invariant it guarantees — and the reason it exists — is that the
+// rendered frame is ALWAYS exactly m.height rows by m.width columns. The AltScreen renderer
+// (and tmux especially) does not clear cells the app didn't repaint, so a frame that is even
+// one row short leaves the previous frame's bottom rows on screen as "garbled" leftover text.
+// huh forms are the main offender: their height is their content height and it GROWS when an
+// inline validation error appears, so the frame would otherwise fluctuate as the user types.
+func (m model) frameView() string {
 	var body string
 	switch {
 	case m.fatalErr != nil && !m.ready:
@@ -33,6 +46,16 @@ func (m model) View() tea.View {
 		}
 	}
 
+	// Before the terminal size is known, render the raw frame (a transient pre-WindowSizeMsg
+	// state); once known, pin the body and clamp the frame so it is exactly m.height × m.width.
+	if m.width > 0 && m.height > 0 {
+		// Pin the body to the rows JoinVertical budgets for it. MaxHeight truncates an
+		// over-tall body (a huge form) so the status/help bars are never pushed off-screen,
+		// rather than letting the body grow the frame past m.height.
+		bodyH := max(1, m.height-2-m.helpRows())
+		body = lipgloss.NewStyle().Width(m.width).Height(bodyH).MaxHeight(bodyH).Render(body)
+	}
+
 	frame := lipgloss.JoinVertical(lipgloss.Left,
 		m.headerLine(),
 		body,
@@ -40,9 +63,17 @@ func (m model) View() tea.View {
 		m.bottomBar(),
 	)
 
-	v := tea.NewView(frame)
-	v.AltScreen = true
-	return v
+	if m.width > 0 && m.height > 0 {
+		// Final guard: pad up to and clip down to exactly the terminal box in both dimensions.
+		// Height() pads a short frame (e.g. a mode whose help bar is fewer lines than budgeted)
+		// so no stale rows survive; MaxWidth clips a too-wide header/toast/help line (AltScreen
+		// clips horizontally without wrapping).
+		frame = lipgloss.NewStyle().
+			Width(m.width).MaxWidth(m.width).
+			Height(m.height).MaxHeight(m.height).
+			Render(frame)
+	}
+	return frame
 }
 
 func (m model) listBody() string {
