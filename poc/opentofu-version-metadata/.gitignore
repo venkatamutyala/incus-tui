@@ -1,0 +1,6 @@
+# OpenTofu working files — the PoC is meant to be re-init'd, not replayed.
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+tfplan
